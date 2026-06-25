@@ -88,7 +88,7 @@ len_chamber = V_chamber/(pi*Rc^2);
 len_total = len_chamber + len_conv + len_div; % m
 
 %% Encoding Geometry
-dx = 0.0005; % 0.5mm step size
+dx = 0.001; % 1 mm step size
 % Recentering coordinates to around throat
 x_t = 0;
 x_chamber_start = -(len_chamber + len_conv);
@@ -126,23 +126,25 @@ end
 min_tol = 0.001; % m 3d printer tolerance
 D_engine = 2 * pos_j; % Array of diameter at every node
 D_t = 2 * Rt;
-h_channel = min_tol;
+h_channel = min_tol; % channel height (radial)
 wall_thickness = min_tol;
-w_rib = min_tol; % fixed
-D_channel_base = D_engine + 2 * wall_thickness;
-D_t_base = D_t + 2 * wall_thickness;
+w_rib = min_tol; % fixed, rib width
+D_channel_base = D_engine + 2 * wall_thickness; % Engine diameters wtih added wall thickness
+D_t_base = D_t + 2 * wall_thickness; % Throat diameter with added wall thickness
 % Number of channels determined at throat
 circ_t_base = pi * (D_t_base); % Gas side diameter + wall thickness
 num_channel = floor(circ_t_base / (w_rib + min_tol));
 % Local circumferences across engine
 circ_local_base = pi * D_channel_base;
-w_channel = (circ_local_base - (num_channel * w_rib)) ./ num_channel;
-D_h = (4 .* w_channel .* h_channel) ./ (2 * w_channel + 2 * h_channel);
+w_channel = (circ_local_base - (num_channel * w_rib)) ./ num_channel; % variable, channel widths
+D_h = (4 .* w_channel .* h_channel) ./ (2 * w_channel + 2 * h_channel); % hydraulic diameter of rectangular channels
 Per_heated = w_channel + 2 * h_channel; % heated perimeter 
 
 %Areas
-Stot = Per_heated .* num_channel .* dx; % coolant side surface area (heated)
-Sg = pi .* D_engine .* dx; % gas side surface area
+%Stot = Per_heated .* num_channel .* dx; % coolant side surface area (heated)
+%Sg = pi .* D_engine .* dx; % gas side surface area
+Aw_cool = w_channel .* dx; % cool wall area per increment
+Afin = h_channel .* dx; % fin area per increment
 
 %% Visualization Plot
 %{
