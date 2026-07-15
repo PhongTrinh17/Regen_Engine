@@ -1,23 +1,50 @@
 Given all inputs and properties tables set-up:
 Assume ambient temp is 298K, then T_co = T_amb (non cryogenic)
 
+PRESSURE LOOP
 Pressure guess in psi (convert to Pa)
-FOR dx in no. geometric stations:
-    Solve for v using mdot equation -> v = mdot_f / rho * Aw_cool
-    Find Reynolds number based on local rho, v, Dh, mu
-    Find Prandtl using local Cp, mu, k
-    Find Nusselt with Dittus Boelter: Nu = 0.023 * Re^0.8 * Pr^0.4 (0.34?)
-    Find coolant convection HT coeff h_c = Nu * k / Dh
 
-    t_w_guess = value
-    t_w_converging = False
-    WHILE  t_w_converging = False 
-        Solve for h_g using Bartz and t_w_guess
-        Solve for equivalent heat flux from Taw and Tco
-        Solve for Tw from gas-wall convection 
-        IF f t_w = t_w_guess
-            t_w_converging = True
-        ELSE
-            bisec new t_w_guess value
-    Find T_wo from wall-coolant convection
-    IF T_wo > Tsat (at this pressure guess)
+    AXIAL MARCH
+    FOR dx in no. geometric stations:
+        Solve for v using mdot equation -> v = mdot_f / rho * Aw_cool
+        Find Reynolds number based on local rho, v, Dh, mu
+        Find Prandtl using local Cp, mu, k
+        Find Nusselt with Gnielinski
+        Find coolant convection HT coeff h_c = Nu * k / Dh
+
+        HOT WALL TEMP SOLVE
+        t_w_guess = value
+        t_w_converging = False
+        error = max value
+        WHILE  t_w_converging = False
+            Solve for h_g using Bartz and t_w_guess
+            Solve for equivalent heat flux q1 from Taw and Tco
+            Solve for Tw from gas-wall convection (q1 = q2)
+            IF T_sat >= Tw
+                Solve q3 from nucleate
+            ELSE
+                Solve q3 from resistance
+            error = q1 - q3
+            IF abs(error) > tol (set tol)
+                New t_w_guess from secant
+            ELSE
+                t_w_converging = true
+    
+        CHF CHECK
+        Solve wall-coolant flux q"
+        Find CHF with HH equations
+        IF q" >= CHF
+            Script fails (area loop ends?)
+
+        COOLANT UPDATE
+        Calculate next T_co
+        Calculate presure loss
+        Update rho
+        Update k
+        Update Cp
+        Update mu
+
+IF P_final = P_target
+    Return
+ELSE
+    Update 
