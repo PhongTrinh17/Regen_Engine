@@ -17,13 +17,13 @@ cf_eff = 0.98;
 % CEA parameters where Pamb = 9.94 psia (interpolate for diff values across nozzle after)
 % Taken from throat (A/At = 1.00)
 o_f = 1.3;
-Pc_us = 300; % psia, target 
+Pc_us = 300; % psia, target
 Pc = Pc_us * 6894.7573; % Pa
 card_str = sprintf(['fuel C2H5OH(L)   C 2 H 6 O 1\n', ...
-                    'h,cal=-66370.0      t(k)=298.00      wt%%=75.00\n', ...
-                    'fuel water H 2.0 O 1.0  wt%%=25.00\n', ...
-                    'h,cal=-68308.  t(k)=298.00 rho,g/cc = 0.9998']);
-                    
+    'h,cal=-66370.0      t(k)=298.00      wt%%=75.00\n', ...
+    'fuel water H 2.0 O 1.0  wt%%=25.00\n', ...
+    'h,cal=-68308.  t(k)=298.00 rho,g/cc = 0.9998']);
+
 py.rocketcea.cea_obj.add_new_fuel('ETHANOL_WATER_75_25(L)', card_str);
 fuel = 'ETHANOL_WATER_75_25(L)';
 c = py.rocketcea.cea_obj.CEA_Obj(pyargs('oxName', oxidizer,'fuelName', fuel));
@@ -33,7 +33,7 @@ transport_chamber = c.get_Chamber_Transport(pyargs('Pc', Pc_us, 'MR', o_f, 'eps'
 transport_throat = c.get_Throat_Transport(pyargs('Pc', Pc_us, 'MR', o_f, 'eps', eps));
 transport_exit = c.get_Exit_Transport(pyargs('Pc', Pc_us, 'MR', o_f, 'eps', eps));
 cp_g_ref = [double(transport_chamber{1}), double(transport_throat{1}), double(transport_exit{1})] .* 4184; % J/kg*K
-mu_g_ref = [double(transport_chamber{2}), double(transport_throat{2}), double(transport_exit{2})] .* 0.0001; % Pa*s viscosity 
+mu_g_ref = [double(transport_chamber{2}), double(transport_throat{2}), double(transport_exit{2})] .* 0.0001; % Pa*s viscosity
 k_g_ref = [double(transport_chamber{3}), double(transport_throat{3}), double(transport_exit{3})] .* 0.4184; % W/m*K thermal conductivity
 prandtl_ref = [double(transport_chamber{4}), double(transport_throat{4}), double(transport_exit{4})];
 
@@ -64,7 +64,7 @@ Rt = sqrt(At/pi); % m
 
 %% Diverging Geometry
 %Me = sqrt((2/(gamma-1))*((Pc_us/Pamb)^((gamma - 1)/gamma) - 1));
-%Ae = At * (1/Me)*((2/(gamma + 1))*(1 + ((gamma - 1)/2) * Me^2))^((gamma + 1)/(2*(gamma - 1))); 
+%Ae = At * (1/Me)*((2/(gamma + 1))*(1 + ((gamma - 1)/2) * Me^2))^((gamma + 1)/(2*(gamma - 1)));
 Ae = At * eps; % m^2
 Re = sqrt(Ae/pi); % m
 percent_len = 0.8; % input (0.8 is optimal fractional length for most cases)
@@ -138,10 +138,10 @@ num_channel = floor(circ_t_base / (w_rib + min_tol));
 circ_local_base = pi * D_channel_base;
 w_channel = (circ_local_base - (num_channel * w_rib)) ./ num_channel; % variable, channel widths
 D_h = (4 .* w_channel .* h_channel) ./ (2 * w_channel + 2 * h_channel); % hydraulic diameter of rectangular channels
-Per_heated = w_channel + 2 * h_channel; % heated perimeter 
+Per_heated = w_channel + 2 * h_channel; % heated perimeter
 
 %Areas
-%Stot = Per_heated .* num_channel .* dx; % coolant side surface area (heated)
+Stot = Per_heated .* num_channel .* dx; % coolant side surface area (heated)
 %Sg = pi .* D_engine .* dx; % gas side surface area
 Aw_cool = w_channel .* dx; % cool wall area per increment
 Afin = h_channel .* dx; % fin area per increment
@@ -158,7 +158,7 @@ ylabel('Radial Position y (m)');
 axis equal;
 xline(0, 'r--', 'Throat', 'LabelVerticalAlignment', 'bottom');
 hold off;
-%} 
+%}
 
 %% Gas Properties
 % 1D interpolation from 3 CEA points for Cp, gamma, k, mu for Bartz
@@ -170,7 +170,7 @@ mu_g_local = interp1(AR_ref, mu_g_ref, AR_local, 'linear', 'extrap');
 k_g_local = interp1(AR_ref, k_g_ref, AR_local, 'linear', 'extrap');
 prandtl_g_local = interp1(AR_ref, prandtl_ref, AR_local, 'linear', 'extrap');
 % Local Mach from isentropic area-mach relation
-M_local = zeros(size(pos_i)); 
+M_local = zeros(size(pos_i));
 for k = 1:length(pos_i)
     if pos_i(k) < 0 % Chamber and Converging
         M_local(k) = flowisentropic(gamma, AR_local(k), 'sub');
@@ -180,8 +180,8 @@ for k = 1:length(pos_i)
         M_local(k) = flowisentropic(gamma, AR_local(k), 'sup');
     end
 end
-Taw_local = T_stag * ((1 + prandtl_g_local.^(1/3).*((gamma - 1) / 2) .* M_local.^2) ...
-            ./ (1 + ((gamma - 1) / 2) .* M_local.^2));
+Taw = T_stag * ((1 + prandtl_g_local.^(1/3).*((gamma - 1) / 2) .* M_local.^2) ...
+    ./ (1 + ((gamma - 1) / 2) .* M_local.^2));
 
 %% Coolant Properties
 
@@ -189,13 +189,13 @@ Taw_local = T_stag * ((1 + prandtl_g_local.^(1/3).*((gamma - 1) / 2) .* M_local.
 % Define Table bounds (Tmax < Tsat at Pmin or coolprop will crash)
 table_filename = 'coolprop_tables.mat';
 if isfile(table_filename)
-    load(table_filename); 
+    load(table_filename);
 else % create tables first time (delete file when changing parameters)
     res = 50; % 50x50 data grid
     P_min = convpres(300, 'psi', 'Pa'); % Pa, at chamber
     P_max = convpres(900, 'psi', 'Pa'); % Pa, at fuel tank
     T_min = 290; % K, standard inlet temp
-    T_max = 450; % K, below 300 psi boiling point of ethanol 
+    T_max = 450; % K, below 300 psi boiling point of ethanol
     % 1D vectors for P and T (fast solve for Coolprop, easy to get)
     P_vec = linspace(P_min, P_max, res);
     T_vec = linspace(T_min, T_max, res);
@@ -220,7 +220,7 @@ else % create tables first time (delete file when changing parameters)
         for j = 1:res
             P_val = P_grid(i,j);
             T_val = T_grid(i,j);
-    
+            
             rho_eth = py.CoolProp.CoolProp.PropsSI('D','T',T_val,'P',P_val,'ethanol');
             rho_h2o = py.CoolProp.CoolProp.PropsSI('D','T',T_val,'P',P_val,'water');
             cp_eth = py.CoolProp.CoolProp.PropsSI('C','T',T_val,'P',P_val,'ethanol');
@@ -229,7 +229,7 @@ else % create tables first time (delete file when changing parameters)
             mu_h2o = py.CoolProp.CoolProp.PropsSI('V','T',T_val,'P',P_val,'water');
             k_eth = py.CoolProp.CoolProp.PropsSI('L','T',T_val,'P',P_val,'ethanol');
             k_h2o = py.CoolProp.CoolProp.PropsSI('L','T',T_val,'P',P_val,'water');
-    
+            
             rho_grid(i,j) =  1 / ((mfrac_eth / rho_eth) + (mfrac_h2o / rho_h2o));
             cp_grid(i,j) = mfrac_eth * cp_eth + mfrac_h2o * cp_h2o;
             mu_grid(i,j) = mfrac_eth * mu_eth + mfrac_h2o * mu_h2o;
@@ -245,19 +245,51 @@ else % create tables first time (delete file when changing parameters)
     save(table_filename,'get_rho', 'get_cp', 'get_mu', 'get_k', 'get_Tsat', 'P_vec', 'T_vec')
 end
 
-%% Material Properties (Copper)
-T_mp = 1357.77; % K
+%% Material Properties (316 Stainless)
+T_mp = 1643.15; % K
 % Wall thermal conductivity k_w = f(T)
-mat_tstep = 20;
-k_w_ref_temps = [273, 400, 600, 800, 1000, 1200];
-k_w_ref = [401, 392, 383, 371, 357, 342];
-get_k_w = griddedInterpolant(k_w_ref_temps, k_w_ref, 'linear'); % R^2 = 0.994
+k_w_ref_temps = [-0.15, 19.85, 26.85, 76.85, 126.85, 226.85, 326.85, 426.85, 526.85, 626.85, ...
+    726.85, 826.85, 926.85, 1026.9, 1126.9, 1226.9, 1326.9, 1370.9, 1398.9, 1426.9] + 273.15; % K
+k_w_ref = [12.97, 13.31, 13.44, 14.32, 15.16, 16.8, 18.36, 19.87, 21.39, 22.79, 24.06, 25.46, 26.74, ...
+    28.02, 29.32, 30.61, 31.86, 32.41, 26.9, 27.24];
+%get_k_w = interp1(k_w_ref_temps, k_w_ref, k_w_local, 'linear'); % callout
+
+
 
 %% Main Loop
 P_guess = convpres(500, 'psi', 'Pa');
-for d = length(pos_i):1
+P_converged = false; 
+while P_converged == false % Pressure guess loop
 
+    P_loc = P_guess;
+    T_bulk = T_amb; 
+
+    for d = length(pos_i):-1:1 % Axial marching loop
+        % Coolant properties
+        rho_c = get_rho(P_loc, T_bulk);
+        cp_c = get_cp(P_loc, T_bulk);
+        mu_c = get_mu(P_loc, T_bulk);
+        k_c = get_k(P_loc, T_bulk);
+        
+        T_sat = get_Tsat(P_loc);
+
+        % Dittus-Boelter for now, Gnielinsky later
+        vel_c = mdot_f * Stot;
+        Re = (rho_c * D_channel_base * vel_c) / mu_c;
+        Nu = 0.023 * Re^(0.8) * (cp_c * mu_c / k_c)^(0.34); % Dittus-Boelter
+        h_c = Nu * k_c / D_channel_base; % coolant convection htc
+
+        % Update the bulk temperature based on energy balance
+        %T_bulk = T_bulk - (mdot_f * cp_c * (T_bulk - Taw_loc)) / (Stot * h_c); check later autofilled
+        
+        % Gas properties
+        Taw_loc = Taw(d); % local adiabatic wall temp
+
+        
+    end
 end
+
+
 
 
 
