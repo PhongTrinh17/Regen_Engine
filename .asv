@@ -59,5 +59,4 @@ ELSE
     Take channel geometry from previous iteration
     Script ends
 
-*If script fails on first run, initial area guess too high
-*Script should only fail on CHF or stress
+(if script fails on first run, smth def wrong; scrip
