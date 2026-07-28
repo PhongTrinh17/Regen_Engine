@@ -285,6 +285,30 @@ while P_converged == false % Pressure guess loop
         % Gas properties
         Taw_loc = Taw(d); % local adiabatic wall temp
 
+        %Geometry
+        D_loc = 2*pos_j(d);
+        A = pi*pos_j(d)^2;
+        D_t = Rt*2;
+        R = ???
+        L = length(pos_i);
+
+        %HW Temp Iteration
+        Thw_converged = false;
+        while Thw_converged == false
+            sigma = 1/... % Bartz correction factor
+                ((0.5*Thw/Taw(d)*(1+((gamma-1)*(M_local(d))/2)+0.5)^(0.68))*...
+                (1+0.5*(gamma-1)*M_local(d)^2)^0.12);
+            h_g = ((0.026/D_t^2)*...
+                (((mu_g_local(d)^0.2)*cp_g_local(d))/prandtl_g_local(d)^0.6)*...
+                ((Pc*9.8)/cstar_act)^0.8)*...
+                (D_t/R)^0.1*...
+                (At/A)^0.9*...
+                sigma;
+            q_equiv = (Taw_loc-T_bulk)/... %need wall thickness t, fin eff, wall cond k
+                ((1/h_g)+(t/k)+...
+                (1/(h_c*L*(2*fin_eff*h_channel+w_channel)))+...
+                ((num_channel*ln(1+2*t/D_loc))/(2*pi*L*k)));
+        end
         
     end
 end
