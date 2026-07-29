@@ -287,14 +287,18 @@ while P_converged == false % Pressure guess loop
 
         %Geometry
         D_loc = 2*pos_j(d);
-        A = pi*pos_j(d)^2;
+        A_cs = pi*pos_j(d)^2; % Cross sectional area
         D_t = Rt*2;
-        R = ???
+        R = ??? % Radius of throat curve
         L = length(pos_i);
+        A_hw = ??? % Local surface area of hot wall (need to take into account half angle at station)
+        A_cw = ???
 
         %HW Temp Iteration
+        Thw_guess = ??? % Set guess (based on what?)
         Thw_converged = false;
-        while Thw_converged == false
+        tol = ??? %Set some tolerance
+        while q_converged == false
             sigma = 1/... % Bartz correction factor
                 ((0.5*Thw/Taw(d)*(1+((gamma-1)*(M_local(d))/2)+0.5)^(0.68))*...
                 (1+0.5*(gamma-1)*M_local(d)^2)^0.12);
@@ -302,19 +306,34 @@ while P_converged == false % Pressure guess loop
                 (((mu_g_local(d)^0.2)*cp_g_local(d))/prandtl_g_local(d)^0.6)*...
                 ((Pc*9.8)/cstar_act)^0.8)*...
                 (D_t/R)^0.1*...
-                (At/A)^0.9*...
+                (At/A_cs)^0.9*...
                 sigma;
-            q_equiv = (Taw_loc-T_bulk)/... %need wall thickness t, fin eff, wall cond k
+            q_1 = (Taw_loc-T_bulk)/... %need wall thickness t, fin eff, wall cond k
                 ((1/h_g)+(t/k)+...
                 (1/(h_c*L*(2*fin_eff*h_channel+w_channel)))+...
                 ((num_channel*ln(1+2*t/D_loc))/(2*pi*L*k)));
+            Thw_calc = Taw_loc - q_equiv/(A_hw*h_g);
+            Tcw = Thw_calc - (q_1*t)/(k*A_cw); %need wall thickness t, wall cond k
+            if (Tcw <= T_sat)
+                q_3 = 1/...
+                    (((1/(h_c*L*(2*fin_eff*h_channel+w_channel)))+...
+                    ((num_channel*ln(1+2*t/D_loc))/(2*pi*L*k)))*...
+                    (Thw_calc-T_bulk));
+            else % Nucleate
+                h_nb = 0.00122*... %need latent heat of vap h_fg, dens of liquid & vap rho_c_l rho_c_v, surface ten surften, vap press
+                    (((k_c^0.79)*(cp_c^0.45)*(rho_c_l^0.49))/...
+                    ((surften^0.5)*(mu_c^0.29)*(h_fg^0.24)*(rho_c_v^0.24)))*...
+                    ((Tcw-T_sat)^0.24)*...
+                    (P_sat_Tcw - P_sat_T_sat)^0.75;
+                q_3 = 
+            end
+            if (abs(q_3-q_1)<=tol)
+                Thw_converged = true;
+            else
+                Thw_guess = Thw_calc;
+            end
         end
+
         
     end
 end
-
-
-
-
-
-
