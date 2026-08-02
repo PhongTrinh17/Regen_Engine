@@ -315,7 +315,7 @@ while P_converged == false % Pressure guess loop
             % Fin Efficiency
             k_w_loc = interp1(k_w_ref_temps, k_w_ref, Thw_guess, 'linear');
             fin_m = sqrt((2*h_c*(dx + w_rib))/(k_w_loc * dx * w_rib));
-            fin_eff = tanh(fin_m * h_channel) / (fin_m * h_channel);
+            fin_eff = tanh(fin_m*wall)
             % Gas convection HTC with Bartz
             sigma = 1/... 
                 ((0.5*Thw_guess/Taw_loc*(1+((gamma-1)*(M_local(d))/2)+0.5)^(0.68))*...
