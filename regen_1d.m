@@ -311,6 +311,7 @@ while P_converged == false % Pressure guess loop
         Thw_guess = 1315; % Initial Guess (1.25 FOS applied to material melting point)
         Thw_prev_guess = 650; % Random value that Luca said placeholder for now
         tol = 0.1; % Watts
+        q_error = realmax;
         while abs(q_error) > tol
             % Fin Efficiency
             k_w_loc = interp1(k_w_ref_temps, k_w_ref, Thw_guess, 'linear');
@@ -341,7 +342,7 @@ while P_converged == false % Pressure guess loop
             if (Tcw <= T_sat)
                 q_3 = 1/...
                     (((1/(h_c*dx*(2*fin_eff*ch+cw)))+...
-                    ((num_channel*ln(D_g_loc+2*wall_thickness/D_g_loc))/(2*pi*dx*k_g_local(d))))*...
+                    ((num_channel*ln(1+2*wall_thickness/D_g_loc))/(2*pi*dx*k_g_local(d))))*...
                     (Thw_calc-T_bulk));
             else % Nucleate
                 h_nb = 0.00122*... %need latent heat of vap h_fg, dens of liquid & vap rho_c_l rho_c_v, surface ten surften, vap press
@@ -349,7 +350,8 @@ while P_converged == false % Pressure guess loop
                     ((surften^0.5)*(mu_c^0.29)*(h_fg^0.24)*(rho_c_v^0.24)))*...
                     ((Tcw-T_sat)^0.24)*...
                     (P_sat_Tcw - P_sat_T_sat)^0.75;
-                q_3 = ;
+                S = 1/(1+(2.53*(10^-6))*(Re^1.17));
+                q_3 = h_c(Tcw-T_bulk)+S*h_nb*(Tcw-T_sat);
             end
             
             q_error = q1 - q3;
@@ -358,6 +360,29 @@ while P_converged == false % Pressure guess loop
             q_prev_error = q_error; % Once lower bound value is confirmed by Luca I will run the script without the loop to get this starting error value
         end
         
+        %Check CHF
+        q_flux = q1/(pi*(D_g_loc+wall_thickness*2)*dx);
+
+        %Prepare for next station
+        T_bulk = T_bulk + q_1/(mdot_f*cp_c); %we need to store all the T_bulks, add an array later
+        if (Re>4000)
+            f = 64/Re;
+            f_error = realmax;
+            while abs(f_error) > tol_f
+                f_calc = (-2*log(2.51/(Re*f_guess)+r/(D_h*3.72)))^2; %need surface roughness r
+                f_error = f_calc - f;
+                f = f_calc;
+            end
+        elseif (Re<2300)
+            f = 64/Re;
+        else
+            %interpolation between???
+        end
+        P_loss_viscous = (f*rho_c*vel_c^2*dx)/(2*D_h);
+        P_loss_area =
+        P_loss_mom = mdot_f^2*...
+            (1/(ch*cw*num_channel)) * (1/(rho_c))
+
     end
 end
 
