@@ -289,12 +289,18 @@ while P_converged == false % Pressure guess loop
         % Gas properties
         Taw_loc = Taw(d); % local adiabatic wall temp
  
-        % Local Geometry
+        % Local Geometry, add channel height array earlier
         A_g_loc = A_gas(d);
         A_w_loc = A_w(d);
         D_g_loc = D_gas(d);
         cw = w_channel(d);
         ch = h_channel;
+        D_h_loc = (2*cw*ch)/(cw+ch);
+        A_c_cs = cw*ch; %cross sectional area of channel
+        if (d ~= length(pos_i))
+            A_c_cs_next = w_channel(d+1)*h_channel(d+1);
+            D_h_loc_next = (2*w_channel(d+1)*h_channel(d+1)/(w_channel(d+1)+h_channel(d+1)));
+        end
         % For wall-coolant HT: t_i = wall_thickness, Nch = num_channel, Di = D_g_loc, Li = dx
         
         %{
@@ -362,9 +368,17 @@ while P_converged == false % Pressure guess loop
         
         %Check CHF
         q_flux = q1/(pi*(D_g_loc+wall_thickness*2)*dx);
+        F_p = 1.17-8.56*10^4*convpres(P_loc, 'Pa', 'psi');
+        CHF_base = 0.1003+0.05264*sqrt(convvel(vel_c, 'm/s', 'ft/s')*...
+            (convtemp(T_sat, 'K', 'F')-convtemp(T_bulk, 'K', 'F')));
+        CHF = CHF_base*F_p*1635000;
+        if (q_flux >= CHF) %prob change this to smth else
+            error('CHF failed at station ' + d);
+        end
 
         %Prepare for next station
         T_bulk = T_bulk + q_1/(mdot_f*cp_c); %we need to store all the T_bulks, add an array later
+
         if (Re>4000)
             f = 64/Re;
             f_error = realmax;
@@ -378,11 +392,26 @@ while P_converged == false % Pressure guess loop
         else
             %interpolation between???
         end
-        P_loss_viscous = (f*rho_c*vel_c^2*dx)/(2*D_h);
-        P_loss_area =
-        P_loss_mom = mdot_f^2*...
-            (1/(ch*cw*num_channel)) * (1/(rho_c))
-
+        P_loss_viscous = (f*rho_c*vel_c^2*dx)/(2*D_h_loc);
+        if (d ~= length(pos_i))
+            if (A_c_cs < A_c_cs_next)
+                K = ((D_h_loc/D_h_loc_next)^2-1)^2;
+            elseif (A_c_cs > A_c_cs_next)
+                K = 0.5-0.167*(D_h_loc_next/D_h_loc)-...
+                    0.125*(D_h_loc_next/D_h_loc)^2-...
+                    0.208*(D_h_loc_next/D_h_loc)^3;
+            else
+                K = 0;
+            end
+            P_loss_area = 0.5*K*rho_c*vel_c^2;
+        else
+            P_loss_area = 0;
+        end
+        P_loss_mom = mdot_f^2*... %assume den diff is negligible, unless can find a way to get next station den 
+            (2/(A_c_cs*num_channel+A_c_cs_next*num_channel))*...
+            (1/(rho_c*A_c_cs*num_channel) - 1/(rho_c*A_c_cs_next*num_channel));
+        P_loss_tot = P_loss_mom + P_loss_area + P_loss_viscous; %we should array these
+        P_loc = P_loc - P_loss_tot; %should also array these
     end
 end
 
