@@ -74,7 +74,7 @@ theta_n = deg2rad(23); % deg
 
 %% Chamber and Converging Geometry
 conv_angle = deg2rad(45); % deg, standard
-L_star = 35; % in, optimal for ethanol/lox
+L_star = 40; % in, optimal for ethanol/lox
 id_chamber = 4.75; % in, heritage
 V_total = convlength(L_star, 'in', 'm') * At; % m^3
 Rc = convlength(id_chamber / 2, 'in', 'm'); % m
@@ -145,25 +145,30 @@ Per_heated = w_channel + 2 * h_channel; % heated perimeter
 %% HT Areas
 A_gas = pi .* D_gas .* dx; % Gas-wall convection SA
 A_w = pi .* ((D_gas + D_channel_base)./2) .* dx; % wall-wall conduction SA (average diameter)
-% For wall-coolant HT: t_i = wall_thickness, Nch = num_channel, Di = D_gas, Li = dx, ch = h_channel, cw = w_channel
-
-
 A_co = Per_heated .* num_channel .* dx; % coolant side surface area (heated)
 A_wc = w_channel .* dx; % cool wall area per increment
 
 %% Visualization Plot
-%{
+
 figure('Name', '1D Engine Geometry', 'Color', 'w');
 hold on; grid on;
-plot(pos_i, pos_j, 'k', 'LineWidth', 2);
-plot(pos_i, -pos_j, 'k', 'LineWidth', 2);
+plot(pos_i, pos_j, 'k', 'LineWidth', 2, 'DisplayName', 'Hot Wall');
+plot(pos_i, -pos_j, 'k', 'LineWidth', 2, 'HandleVisibility','off');
+
+plot(pos_i, r_channel_base, 'b--', 'LineWidth', 1.5, 'DisplayName', 'Cold Wall');
+plot(pos_i, -r_channel_base, 'b--', 'LineWidth', 1.5, 'HandleVisibility', 'off');
+
+r_outer_jacket = r_channel_base + h_channel;
+plot(pos_i, r_outer_jacket, 'b', 'LineWidth', 2, 'DisplayName', 'Outer Jacket');
+plot(pos_i, -r_outer_jacket, 'b', 'LineWidth', 2, 'HandleVisibility', 'off');
+
 title('Regen 1D Profile')
 xlabel('Axial Position x (m)');
 ylabel('Radial Position y (m)');
 axis equal;
-xline(0, 'r--', 'Throat', 'LabelVerticalAlignment', 'bottom');
+xline(0, 'r--', 'Throat', 'LabelVerticalAlignment', 'bottom', 'HandleVisibility', 'off');
 hold off;
-%}
+
 
 %% Gas Properties
 % 1D interpolation from 3 CEA points for Cp, gamma, k, mu for Bartz
@@ -257,7 +262,18 @@ k_w_ref_temps = [-0.15, 19.85, 26.85, 76.85, 126.85, 226.85, 326.85, 426.85, 526
     726.85, 826.85, 926.85, 1026.9, 1126.9, 1226.9, 1326.9, 1370.9, 1398.9, 1426.9] + 273.15; % K
 k_w_ref = [12.97, 13.31, 13.44, 14.32, 15.16, 16.8, 18.36, 19.87, 21.39, 22.79, 24.06, 25.46, 26.74, ...
     28.02, 29.32, 30.61, 31.86, 32.41, 26.9, 27.24];
+r = 1e-4; % m, surface roughness
 %get_k_w = interp1(k_w_ref_temps, k_w_ref, T_w_local, 'linear'); % callout
+
+%% Output Arrays
+T_hw_array = zeros(size(pos_i));
+T_cw_array = zeros(size(pos_i));
+T_bulk_array = zeros(size(pos_i));
+P_array = zeros(size(pos_i));
+P_loss_array = zeros(size(pos_i));
+q_flux_array = zeros(size(pos_i));
+h_g_array = zeros(size(pos_i));
+h_c_array = zeros(size(pos_i));
 
 %% Main Loop
 P_guess = convpres(500, 'psi', 'Pa');
@@ -281,13 +297,11 @@ while P_converged == false % Pressure guess loop
         vel_c = mdot_f / (A_co(d) * rho_c);
         Re = (rho_c * D_channel_base * vel_c) / mu_c;
         Nu = 0.023 * Re^(0.8) * (cp_c * mu_c / k_c)^(0.34); % Dittus-Boelter
-        h_c = Nu * k_c / D_channel_base; % coolant convection htc
-
-        % Update the bulk temperature based on energy balance
-        %T_bulk = T_bulk - (mdot_f * cp_c * (T_bulk - Taw_loc)) / (Stot * h_c); check later autofilled
+        h_c = Nu * k_c / D_channel_base; % Coolant convection htc
+        h_c_array(d) = h_c;
         
         % Gas properties
-        Taw_loc = Taw(d); % local adiabatic wall temp
+        Taw_loc = Taw(d); % Local adiabatic wall temp
  
         % Local Geometry, add channel height array earlier
         A_g_loc = A_gas(d);
@@ -296,36 +310,26 @@ while P_converged == false % Pressure guess loop
         cw = w_channel(d);
         ch = h_channel;
         D_h_loc = (2*cw*ch)/(cw+ch);
-        A_c_cs = cw*ch; %cross sectional area of channel
+        A_c_cs = cw*ch; % Cross sectional area of channel
         if (d ~= length(pos_i))
             A_c_cs_next = w_channel(d+1)*h_channel(d+1);
             D_h_loc_next = (2*w_channel(d+1)*h_channel(d+1)/(w_channel(d+1)+h_channel(d+1)));
         end
         % For wall-coolant HT: t_i = wall_thickness, Nch = num_channel, Di = D_g_loc, Li = dx
-        
-        %{
-        D_loc = 2*pos_j(d);
-        A_cs = pi*pos_j(d)^2; % Cross sectional area
-        D_t = Rt*2;
-        R = ??? % Radius of throat curve
-        L = length(pos_i);
-        A_hw = ??? % Local surface area of hot wall (need to take into account half angle at station)
-        A_cw = ???
-        %}
 
         % HW Temp Iteration
-        Thw_guess = 1315; % Initial Guess (1.25 FOS applied to material melting point)
-        Thw_prev_guess = 650; % Random value that Luca said placeholder for now
+        T_hw_guess = 1315; % Initial Guess (1.25 FOS applied to material melting point)
+        T_hw_prev_guess = 650; % Random value that Luca said placeholder for now
         tol = 0.1; % Watts
-        q_error = realmax;
+        q_error = realmax; % placeholder
         while abs(q_error) > tol
             % Fin Efficiency
-            k_w_loc = interp1(k_w_ref_temps, k_w_ref, Thw_guess, 'linear');
+            k_w_loc = interp1(k_w_ref_temps, k_w_ref, T_hw_guess, 'linear');
             fin_m = sqrt((2*h_c*(dx + w_rib))/(k_w_loc * dx * w_rib));
             fin_eff = tanh(fin_m * h_channel) / (fin_m * h_channel);
             % Gas convection HTC with Bartz
             sigma = 1/... 
-                ((0.5*Thw_guess/Taw_loc*(1+((gamma-1)*(M_local(d))/2)+0.5)^(0.68))*...
+                ((0.5*T_hw_guess/Taw_loc*(1+((gamma-1)*(M_local(d))/2)+0.5)^(0.68))*...
                 (1+0.5*(gamma-1)*M_local(d)^2)^0.12);
             h_g = ((0.026/D_t^2)*...
                 (((mu_g_local(d)^0.2)*cp_g_local(d))/prandtl_g_local(d)^0.6)*...
@@ -334,65 +338,65 @@ while P_converged == false % Pressure guess loop
                 (At/A_g_loc)^0.9*...
                 sigma;
             
-            q_1 = h_g*A_g_loc*(Taw_loc - Thw_guess);
-            %{
-            q_1 = (Taw_loc-T_bulk)/... %need wall thickness t, fin eff, wall cond k
-                ((1/h_g)+(t/k)+...
-                (1/(h_c*L*(2*fin_eff*h_channel+w_channel)))+...
-                ((num_channel*ln(1+2*t/D_loc))/(2*pi*L*k)));
-            Thw_calc = Taw_loc - q_equiv/(A_hw*h_g);
-            %}
+            q_1 = h_g*A_g_loc*(Taw_loc - T_hw_guess);
 
-            Tcw = Thw_calc - (q_1*wall_thickness)/(k_g_local(d)*A_w_loc); % Cold wall temp derived from guess
+            T_cw = T_hw_calc - (q_1*wall_thickness)/(k_g_local(d)*A_w_loc); % Cold wall temp derived from guess
             % For wall-coolant HT: t_i = wall_thickness, Nch = num_channel, Di = D_g_loc, Li = dx
-            if (Tcw <= T_sat)
+            if (T_cw <= T_sat)
                 q_3 = 1/...
                     (((1/(h_c*dx*(2*fin_eff*ch+cw)))+...
                     ((num_channel*ln(1+2*wall_thickness/D_g_loc))/(2*pi*dx*k_g_local(d))))*...
-                    (Thw_calc-T_bulk));
+                    (T_hw_calc-T_bulk));
             else % Nucleate
                 h_nb = 0.00122*... %need latent heat of vap h_fg, dens of liquid & vap rho_c_l rho_c_v, surface ten surften, vap press
                     (((k_c^0.79)*(cp_c^0.45)*(rho_c_l^0.49))/...
                     ((surften^0.5)*(mu_c^0.29)*(h_fg^0.24)*(rho_c_v^0.24)))*...
-                    ((Tcw-T_sat)^0.24)*...
-                    (P_sat_Tcw - P_sat_T_sat)^0.75;
+                    ((T_cw-T_sat)^0.24)*...
+                    (P_sat_T_cw - P_sat_T_sat)^0.75;
                 S = 1/(1+(2.53*(10^-6))*(Re^1.17));
-                q_3 = h_c(Tcw-T_bulk)+S*h_nb*(Tcw-T_sat);
+                q_3 = h_c(T_cw-T_bulk)+S*h_nb*(T_cw-T_sat);
             end
             
-            q_error = q1 - q3;
-            Thw_guess = Thw_guess - q_error * (Thw_guess - Thw_prev_guess)/(q_error - q_prev_error);
-            Thw_prev_guess = Thw_guess;
+            q_error = q_1 - q_3;
+            T_hw_guess = T_hw_guess - q_error * (T_hw_guess - T_hw_prev_guess)/(q_error - q_prev_error);
+            T_hw_prev_guess = T_hw_guess;
             q_prev_error = q_error; % Once lower bound value is confirmed by Luca I will run the script without the loop to get this starting error value
         end
-        
-        %Check CHF
+        T_hw_array(d) = T_hw_guess;
+        T_cw_array(d) = T_cw;
+
+        % Check CHF
         q_flux = q1/(pi*(D_g_loc+wall_thickness*2)*dx);
-        F_p = 1.17-8.56*10^4*convpres(P_loc, 'Pa', 'psi');
+        F_p = 1.17-8.56*(10^(-4))*convpres(P_loc, 'Pa', 'psi');
         CHF_base = 0.1003+0.05264*sqrt(convvel(vel_c, 'm/s', 'ft/s')*...
             (convtemp(T_sat, 'K', 'F')-convtemp(T_bulk, 'K', 'F')));
         CHF = CHF_base*F_p*1635000;
         if (q_flux >= CHF) %prob change this to smth else
-            error('CHF failed at station ' + d);
+            error('CHF exceeded at station ' + d);
         end
 
-        %Prepare for next station
-        T_bulk = T_bulk + q_1/(mdot_f*cp_c); %we need to store all the T_bulks, add an array later
+        % Prepare for next station
+        T_bulk_array(d) = T_bulk; % Store the updated bulk temperature
+        T_bulk = T_bulk + q_1/(mdot_f*cp_c); % K
 
-        if (Re>4000)
-            f = 64/Re;
-            f_error = realmax;
+        if (Re>4000) % Turbulent
+            f_guess = 64/Re; % Initial guess
+            f_error = 0.1; % Placeholder
+            tol_f = 0.0001;
             while abs(f_error) > tol_f
-                f_calc = (-2*log(2.51/(Re*f_guess)+r/(D_h*3.72)))^2; %need surface roughness r
-                f_error = f_calc - f;
-                f = f_calc;
+                f_calc = (-2*log(2.51/(Re*f_guess)+r/(D_h*3.72)))^2;
+                f_error = f_calc - f_guess;
+                f_guess = f_calc;
             end
-        elseif (Re<2300)
+        elseif (Re<2300) % Laminar
             f = 64/Re;
         else
-            %interpolation between???
+            f = 0.02783 + (7.17*10^-6)*(Re - 2300);
         end
+        
+        % Calculate pressure losses 
         P_loss_viscous = (f*rho_c*vel_c^2*dx)/(2*D_h_loc);
+
         if (d ~= length(pos_i))
             if (A_c_cs < A_c_cs_next)
                 K = ((D_h_loc/D_h_loc_next)^2-1)^2;
@@ -407,11 +411,15 @@ while P_converged == false % Pressure guess loop
         else
             P_loss_area = 0;
         end
-        P_loss_mom = mdot_f^2*... %assume den diff is negligible, unless can find a way to get next station den 
+
+        P_loss_mom = mdot_f^2*... % Assume den diff is negligible, unless can find a way to get next station den 
             (2/(A_c_cs*num_channel+A_c_cs_next*num_channel))*...
             (1/(rho_c*A_c_cs*num_channel) - 1/(rho_c*A_c_cs_next*num_channel));
-        P_loss_tot = P_loss_mom + P_loss_area + P_loss_viscous; %we should array these
-        P_loc = P_loc - P_loss_tot; %should also array these
+
+        P_loss_tot = P_loss_mom + P_loss_area + P_loss_viscous;
+        P_loss_array(d) = P_loss_tot;
+        P_loc = P_loc - P_loss_tot; 
+        P_array(d) = P_loc;
     end
 end
 
