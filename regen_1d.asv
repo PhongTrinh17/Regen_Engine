@@ -477,7 +477,7 @@ plot(pos_i, h_g_array, 'r', 'LineWidth', 2);
 
 title('Gas Heat Transfer Coefficient')
 xlabel('Axial Position x (m)');
-ylabel('Heat Transfer Coefficient (W/m^2*K)');
+ylabel('Heat Transfer Coefficient (W/m^2*K');
 axis equal;
 xline(0, 'k--', 'Throat', 'LabelVerticalAlignment', 'bottom', 'HandleVisibility', 'off');
 hold off;
@@ -488,7 +488,7 @@ plot(pos_i, h_c_array, 'b', 'LineWidth', 2);
 
 title('Coolant Heat Transfer Coefficient')
 xlabel('Axial Position x (m)');
-ylabel('Heat Transfer Coefficient (W/m^2*K)');
+ylabel('Heat Flux (W/m^2)');
 axis equal;
 xline(0, 'k--', 'Throat', 'LabelVerticalAlignment', 'bottom', 'HandleVisibility', 'off');
 hold off;
