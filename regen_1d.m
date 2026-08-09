@@ -2,7 +2,7 @@
 
 clc; clear; close all;
 
-%% Basic Parameters (change to arrays after)
+%% Basic Parameters
 
 F = 1480 * 4.44822; % Target thrust in N
 Pamb = 9.94; % psia At 10,500 ft altitude
@@ -18,7 +18,7 @@ cf_eff = 0.98;
 % Taken from throat (A/At = 1.00)
 o_f = 1.3;
 Pc_us = 300; % psia, target
-Pc = Pc_us * 6894.7573; % Pa
+Pc = convpres(Pc_us, 'psi', 'Pa');
 card_str = sprintf(['fuel C2H5OH(L)   C 2 H 6 O 1\n', ...
     'h,cal=-66370.0      t(k)=298.00      wt%%=75.00\n', ...
     'fuel water H 2.0 O 1.0  wt%%=25.00\n', ...
@@ -196,7 +196,7 @@ Taw = T_stag * ((1 + prandtl_g_local.^(1/3).*((gamma - 1) / 2) .* M_local.^2) ..
 %% Coolant Properties
 
 % Required properties update for equilibrium: Cp, k, mu, rho
-% Define Table bounds (Tmax < Tsat at Pmin or coolprop will crash)
+% Define Table bounds (Tmax < T_sat at Pmin or coolprop will crash)
 table_filename = 'coolprop_tables.mat';
 if isfile(table_filename)
     load(table_filename);
@@ -216,16 +216,46 @@ else % create tables first time (delete file when changing parameters)
     cp_grid = zeros(res,res);
     mu_grid = zeros(res,res);
     k_grid = zeros(res,res);
-    Tsat_grid = zeros(1,res); % 1D
+    % 1D grids
+    T_sat_grid = zeros(1,res);
+    rho_l_grid = zeros(1,res); % sat. liquid density
+    rho_v_grid = zeros(1,res); % sat. vapor density
+    surften_grid = zeros(1,res); % surface tension
+    h_fg_grid = zeros(1,res); % latent heat of vaporization
+
     % Generate values
     for i = 1:res
         P_val = P_vec(i);
         if P_val < 6400000 % Ethanol critical pressure in Pa
-            Tsat_eth = py.CoolProp.CoolProp.PropsSI('T','P',P_val,'Q',0, 'ethanol');
-            Tsat_h2o = py.CoolProp.CoolProp.PropsSI('T','P',P_val,'Q',0, 'water');
-            Tsat_grid(i) = mfrac_eth * Tsat_eth + mfrac_h2o * Tsat_h2o;
+            T_sat_eth = py.CoolProp.CoolProp.PropsSI('T','P',P_val,'Q',0, 'ethanol');
+            T_sat_h2o = py.CoolProp.CoolProp.PropsSI('T','P',P_val,'Q',0, 'water');
+            T_sat_grid(i) = mfrac_eth * T_sat_eth + mfrac_h2o * T_sat_h2o;
+            % Liquid Density
+            rho_l_eth = py.CoolProp.CoolProp.PropsSI('D','P',P_val,'Q',0, 'ethanol');
+            rho_l_h2o = py.CoolProp.CoolProp.PropsSI('D','P',P_val,'Q',0, 'water');
+            rho_l_grid(i) = 1 / ((mfrac_eth / rho_l_eth) + (mfrac_h2o / rho_l_h2o));
+            % Vapor Density
+            rho_v_eth = py.CoolProp.CoolProp.PropsSI('D','P',P_val,'Q',1, 'ethanol');
+            rho_v_h2o = py.CoolProp.CoolProp.PropsSI('D','P',P_val,'Q',1, 'water');
+            rho_v_grid(i) = 1 / ((mfrac_eth / rho_v_eth) + (mfrac_h2o / rho_v_h2o));
+            % Surface Tension (Interfacial)
+            surften_eth = py.CoolProp.CoolProp.PropsSI('I','P',P_val,'Q',0, 'ethanol');
+            surften_h2o = py.CoolProp.CoolProp.PropsSI('I','P',P_val,'Q',0, 'water');
+            surften_grid(i) = mfrac_eth * surften_eth + mfrac_h2o * surften_h2o;
+            % Latent Heat of Vaporization (H_vap - H_liq)
+            h_v_eth = py.CoolProp.CoolProp.PropsSI('H','P',P_val,'Q',1, 'ethanol');
+            h_l_eth = py.CoolProp.CoolProp.PropsSI('H','P',P_val,'Q',0, 'ethanol');
+            h_fg_eth = h_v_eth - h_l_eth;
+            h_v_h2o = py.CoolProp.CoolProp.PropsSI('H','P',P_val,'Q',1, 'water');
+            h_l_h2o = py.CoolProp.CoolProp.PropsSI('H','P',P_val,'Q',0, 'water');
+            h_fg_h2o = h_v_h2o - h_l_h2o;
+            h_fg_grid(i) = mfrac_eth * h_fg_eth + mfrac_h2o * h_fg_h2o;
         else % undefined for superheated vapor
-            Tsat_grid(i) = NaN;
+            T_sat_grid(i) = NaN;
+            rho_l_grid(i) = NaN;
+            rho_v_grid(i) = NaN;
+            surften_grid(i) = NaN;
+            h_fg_grid(i) = NaN;
         end
         for j = 1:res
             P_val = P_grid(i,j);
@@ -246,13 +276,24 @@ else % create tables first time (delete file when changing parameters)
             k_grid(i,j) = mfrac_eth * k_eth + mfrac_h2o * k_h2o;
         end
     end
-    % 2D interpolation objects
+    % Interpolation objects
     get_rho = griddedInterpolant(P_grid, T_grid, rho_grid, 'linear', 'nearest');
     get_cp = griddedInterpolant(P_grid, T_grid, cp_grid, 'linear', 'nearest');
     get_mu = griddedInterpolant(P_grid, T_grid, mu_grid, 'linear', 'nearest');
     get_k = griddedInterpolant(P_grid, T_grid, k_grid, 'linear', 'nearest');
-    get_Tsat = griddedInterpolant(P_vec, Tsat_grid, 'linear', 'nearest');
-    save(table_filename,'get_rho', 'get_cp', 'get_mu', 'get_k', 'get_Tsat', 'P_vec', 'T_vec')
+    get_T_sat = griddedInterpolant(P_vec, T_sat_grid, 'linear', 'nearest');
+    get_rho_l = griddedInterpolant(P_vec, rho_l_grid, 'linear', 'nearest');
+    get_rho_v = griddedInterpolant(P_vec, rho_v_grid, 'linear', 'nearest');
+    get_surften = griddedInterpolant(P_vec, surften_grid, 'linear', 'nearest');
+    get_h_fg = griddedInterpolant(P_vec, h_fg_grid, 'linear', 'nearest');
+    % P_sat grid for nucleate boiling
+    psat_index = ~isnan(T_sat_grid);
+    T_sat_clean = T_sat_grid(psat_index);
+    P_clean = P_vec(psat_index);
+    get_P_sat = griddedInterpolant(T_sat_clean, P_clean, 'linear', 'nearest');
+
+    save(table_filename,'get_rho', 'get_cp', 'get_mu', 'get_k', 'get_T_sat', ...
+        'get_rho_l', 'get_rho_v', 'get_surften', 'get_h_fg', 'P_vec', 'T_vec')
 end
 
 %% Material Properties (316 Stainless)
@@ -277,21 +318,27 @@ h_c_array = zeros(size(pos_i));
 
 %% Main Loop
 P_guess = convpres(500, 'psi', 'Pa');
-P_converged = false; 
-while P_converged == false % Pressure guess loop
-
+P_prev_guess = convpres(450, 'psi', 'Pa');
+P_error = realmax;
+P_prev_error = 0;
+tol_P = 100; % Pa
+iter_P = 0;
+while abs(P_error) > tol_P % Pressure guess loop
+    iter_P = iter_P + 1;
     P_loc = P_guess;
     T_bulk = T_amb; 
 
     for d = length(pos_i):-1:1 % Axial marching loop
-        
         % Coolant properties
         rho_c = get_rho(P_loc, T_bulk);
         cp_c = get_cp(P_loc, T_bulk);
         mu_c = get_mu(P_loc, T_bulk);
         k_c = get_k(P_loc, T_bulk);
-        
-        T_sat = get_Tsat(P_loc);
+        T_sat = get_T_sat(P_loc);
+        rho_c_l = get_rho_l(P_loc);
+        rho_c_v = get_rho_v(P_loc);
+        surften = get_surften(P_loc);
+        h_fg = get_h_fg(P_loc);
 
         % Dittus-Boelter for now, Gnielinsky later
         vel_c = mdot_f / (A_co(d) * rho_c);
@@ -312,17 +359,19 @@ while P_converged == false % Pressure guess loop
         D_h_loc = (2*cw*ch)/(cw+ch);
         A_c_cs = cw*ch; % Cross sectional area of channel
         if (d ~= length(pos_i))
-            A_c_cs_next = w_channel(d+1)*h_channel(d+1);
-            D_h_loc_next = (2*w_channel(d+1)*h_channel(d+1)/(w_channel(d+1)+h_channel(d+1)));
+            A_c_cs_next = w_channel(d+1)*h_channel;
+            D_h_loc_next = (2*w_channel(d+1)*h_channel/(w_channel(d+1)+h_channel));
         end
-        % For wall-coolant HT: t_i = wall_thickness, Nch = num_channel, Di = D_g_loc, Li = dx
 
         % HW Temp Iteration
         T_hw_guess = 1315; % Initial Guess (1.25 FOS applied to material melting point)
-        T_hw_prev_guess = 650; % Random value that Luca said placeholder for now
-        tol = 0.1; % Watts
+        T_hw_prev_guess = 650; % Cooler lower bound (Luca's value)
+        tol_q = 0.1; % Watts
         q_error = realmax; % placeholder
-        while abs(q_error) > tol
+        q_prev_error = 0;
+        iter_T = 0;
+        while abs(q_error) > tol_q
+            iter_T = iter_T + 1;
             % Fin Efficiency
             k_w_loc = interp1(k_w_ref_temps, k_w_ref, T_hw_guess, 'linear');
             fin_m = sqrt((2*h_c*(dx + w_rib))/(k_w_loc * dx * w_rib));
@@ -340,42 +389,55 @@ while P_converged == false % Pressure guess loop
             
             q_1 = h_g*A_g_loc*(Taw_loc - T_hw_guess);
 
-            T_cw = T_hw_calc - (q_1*wall_thickness)/(k_g_local(d)*A_w_loc); % Cold wall temp derived from guess
+            T_cw = T_hw_guess - (q_1*wall_thickness)/(k_w_loc*A_w_loc); % Cold wall temp derived from guess
             % For wall-coolant HT: t_i = wall_thickness, Nch = num_channel, Di = D_g_loc, Li = dx
             if (T_cw <= T_sat)
-                q_3 = 1/...
-                    (((1/(h_c*dx*(2*fin_eff*ch+cw)))+...
-                    ((num_channel*ln(1+2*wall_thickness/D_g_loc))/(2*pi*dx*k_g_local(d))))*...
-                    (T_hw_calc-T_bulk));
+                q_3 = (T_hw_guess-T_bulk)/...
+                    ((1/(h_c*dx*(2*fin_eff*ch+cw)))+...
+                    ((num_channel*log(1+2*wall_thickness/D_g_loc))/(2*pi*dx*k_w_loc)));
             else % Nucleate
-                h_nb = 0.00122*... %need latent heat of vap h_fg, dens of liquid & vap rho_c_l rho_c_v, surface ten surften, vap press
+                P_sat_T_cw = get_P_sat(T_cw);
+                h_nb = 0.00122*...
                     (((k_c^0.79)*(cp_c^0.45)*(rho_c_l^0.49))/...
                     ((surften^0.5)*(mu_c^0.29)*(h_fg^0.24)*(rho_c_v^0.24)))*...
                     ((T_cw-T_sat)^0.24)*...
-                    (P_sat_T_cw - P_sat_T_sat)^0.75;
+                    (P_sat_T_cw - P_loc)^0.75;
                 S = 1/(1+(2.53*(10^-6))*(Re^1.17));
-                q_3 = h_c(T_cw-T_bulk)+S*h_nb*(T_cw-T_sat);
+                q_3 = A_co(d)*(h_c*(T_cw-T_bulk)+S*h_nb*(T_cw-T_sat));
             end
             
-            q_error = q_1 - q_3;
-            T_hw_guess = T_hw_guess - q_error * (T_hw_guess - T_hw_prev_guess)/(q_error - q_prev_error);
-            T_hw_prev_guess = T_hw_guess;
-            q_prev_error = q_error; % Once lower bound value is confirmed by Luca I will run the script without the loop to get this starting error value
+            current_q_error = q_1 - q_3;
+            % Secant
+            if iter_T == 1
+                q_prev_error = current_q_error;
+                temp_T = T_hw_guess;
+                T_hw_guess = T_hw_prev_guess;
+                T_hw_prev_guess = temp_T;
+            else
+                T_next = T_hw_guess - current_q_error * (T_hw_guess - T_hw_prev_guess) / (current_q_error - q_prev_error);
+                T_hw_prev_guess = T_hw_guess;
+                q_prev_error = current_q_error;
+                T_hw_guess = T_next;
+            end
+            q_error = current_q_error;
         end
+
         T_hw_array(d) = T_hw_guess;
         T_cw_array(d) = T_cw;
         h_g_array(d) = h_g;
 
         % Check CHF
-        q_flux = q1/(pi*(D_g_loc+wall_thickness*2)*dx);
+        q_flux = q_1/(pi*(D_g_loc+wall_thickness*2)*dx);
         q_flux_array(d) = q_flux;
         F_p = 1.17-8.56*(10^(-4))*convpres(P_loc, 'Pa', 'psi');
         CHF_base = 0.1003+0.05264*sqrt(convvel(vel_c, 'm/s', 'ft/s')*...
             (convtemp(T_sat, 'K', 'F')-convtemp(T_bulk, 'K', 'F')));
         CHF = CHF_base*F_p*1635000;
+        %{
         if (q_flux >= CHF) %prob change this to smth else
             error('CHF exceeded at station ' + d);
         end
+        %}
 
         % Prepare for next station
         T_bulk_array(d) = T_bulk; % Store the updated bulk temperature
@@ -383,10 +445,10 @@ while P_converged == false % Pressure guess loop
 
         if (Re>4000) % Turbulent
             f_guess = 64/Re; % Initial guess
-            f_error = 0.1; % Placeholder
+            f_error = realmax;
             tol_f = 0.0001;
             while abs(f_error) > tol_f
-                f_calc = (-2*log(2.51/(Re*f_guess)+r/(D_h*3.72)))^2;
+                f_calc = 1/(-2*log10(2.51/(Re*sqrt(f_guess))+r/(D_h_loc*3.72)))^2;
                 f_error = f_calc - f_guess;
                 f_guess = f_calc;
             end
@@ -424,9 +486,20 @@ while P_converged == false % Pressure guess loop
         P_array(d) = convpres(P_loc, 'Pa', 'psi');
     end
 
-    if P_loc == P_target
-        P_converged = True;
+    current_P_error = P_loc - P_target;
+    % Secant
+    if iter_P == 1
+        P_prev_error = current_P_error;
+        temp_P = P_guess;
+        P_guess = P_prev_guess;
+        P_prev_guess = temp_P;
+    else
+        P_next = P_guess - current_P_error * (P_guess - P_prev_guess) / (current_P_error - P_prev_error);
+        P_prev_guess = P_guess;
+        P_prev_error = current_P_error;
+        P_guess = P_next;
     end
+    P_error = current_P_error;
 end
 
 %% Plots
@@ -438,11 +511,9 @@ plot(pos_i, T_hw_array, 'r', 'LineWidth', 2);
 plot(pos_i, T_cw_array, 'b', 'LineWidth', 2);
 plot(pos_i, T_bulk_array, 'c', 'LineWidth', 2);
 legend('Hot Wall', 'Cold Wall', 'Bulk Coolant')
-
 title('Temperatures')
 xlabel('Axial Position x (m)');
 ylabel('Temperature (K)');
-axis equal;
 xline(0, 'k--', 'Throat', 'LabelVerticalAlignment', 'bottom', 'HandleVisibility', 'off');
 hold off;
 
@@ -450,11 +521,9 @@ hold off;
 figure('Name', 'Pressure', 'Color', 'w');
 hold on; grid on;
 plot(pos_i, P_array, 'b', 'LineWidth', 2);
-
 title('Coolant Static Pressure')
 xlabel('Axial Position x (m)');
 ylabel('Pressure (psi)');
-axis equal;
 xline(0, 'k--', 'Throat', 'LabelVerticalAlignment', 'bottom', 'HandleVisibility', 'off');
 hold off;
 
@@ -462,33 +531,28 @@ hold off;
 figure('Name', 'HeatFlux', 'Color', 'w');
 hold on; grid on;
 plot(pos_i, q_flux_array, 'r', 'LineWidth', 2);
-
 title('Coolant Heat Flux')
 xlabel('Axial Position x (m)');
 ylabel('Heat Flux (W/m^2)');
-axis equal;
 xline(0, 'k--', 'Throat', 'LabelVerticalAlignment', 'bottom', 'HandleVisibility', 'off');
+yline(CHF, 'k--', 'CHF', 'LabelHorizontalAlignment','left', 'HandleVisibility','off');
 hold off;
 
 % HTC
 figure('Name', 'GasHTC', 'Color', 'w');
 hold on; grid on;
 plot(pos_i, h_g_array, 'r', 'LineWidth', 2);
-
 title('Gas Heat Transfer Coefficient')
 xlabel('Axial Position x (m)');
 ylabel('Heat Transfer Coefficient (W/m^2*K)');
-axis equal;
 xline(0, 'k--', 'Throat', 'LabelVerticalAlignment', 'bottom', 'HandleVisibility', 'off');
 hold off;
 
 figure('Name', 'CoolantHTC', 'Color', 'w');
 hold on; grid on;
 plot(pos_i, h_c_array, 'b', 'LineWidth', 2);
-
 title('Coolant Heat Transfer Coefficient')
 xlabel('Axial Position x (m)');
 ylabel('Heat Transfer Coefficient (W/m^2*K)');
-axis equal;
 xline(0, 'k--', 'Throat', 'LabelVerticalAlignment', 'bottom', 'HandleVisibility', 'off');
 hold off;
