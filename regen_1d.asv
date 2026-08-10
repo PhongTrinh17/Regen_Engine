@@ -58,6 +58,7 @@ fuel_stiffness = 0.20; % standard
 dP_inj = fuel_stiffness * Pc; % Pa
 mdot_total = F / (cstar_theo * cstar_eff * cf_theo * cf_eff); % kg/s
 cstar_act = cstar_theo .* cstar_eff; % m/s
+cstar_act_us = cstar_act * 39.3701; %in/s
 mdot_f = mdot_total ./ (1 + o_f); % kg/s
 rho_f_inj = 789 * mfrac_eth + 1000 * mfrac_h2o; % kg/m^3 (20C)
 CdA_f_inj = mdot_f / sqrt(2 * rho_f_inj * dP_inj); % m^2 (Heritage)
@@ -67,6 +68,7 @@ P_target = Pc + dP_inj; % Pa manifold pressure (target value)
 At = (cstar_act * mdot_total)/Pc; % m^2
 Rt = sqrt(At/pi); % m
 R_curve = 1.5 * Rt;
+R_curve_us = R_curve * 39.3701; % m - in
 
 %% Diverging Geometry
 %Me = sqrt((2/(gamma-1))*((Pc_us/Pamb)^((gamma - 1)/gamma) - 1));
@@ -83,11 +85,18 @@ conv_angle = deg2rad(45); % deg, standard
 L_star = 40; % in, optimal for ethanol/lox
 id_chamber = 4.75; % in, heritage
 V_total = convlength(L_star, 'in', 'm') * At; % m^3
-Rc = convlength(id_chamber / 2, 'in', 'm'); % m
+Rc = convlength(id_chamber / 2, 'in', 'm'); % m, chamber radius
 x_conv_tangent = -(R_curve) * sin(conv_angle);
 y_conv_tangent = Rt + (R_curve) * (1 - cos(conv_angle));
-x_conv_start = x_conv_tangent - (Rc - y_conv_tangent) / tan(conv_angle);
-len_conv = -x_conv_start; % m
+% 1.5*Rt converging fillet
+R_fillet = Rt;
+y_conv_fillet = Rc - R_fillet; % center height of fillet circle
+y_f_tangent = y_conv_fillet + R_fillet*cos(conv_angle);
+x_f_tangent = x_conv_tangent - (y_f_tangent - y_conv_tangent) / tan(conv_angle);
+x_conv_fillet = x_f_tangent - R_fillet * sin(conv_angle); % x center of fillet circle
+x_chamber_end = x_conv_fillet;
+
+len_conv = -x_chamber_end; % m
 V_conv = (1/3 * pi * len_conv) * (Rc^2 + Rt^2 + Rc*Rt); % m^3
 V_chamber = V_total - V_conv;
 len_chamber = V_chamber/(pi*Rc^2);
@@ -113,20 +122,23 @@ matrix_A = [xn^2, xn, 1; x_exit^2, x_exit, 1; 2*xn, 1, 0];
 matrix_B = [Rn; Re; tan(theta_n)];
 coeffs = matrix_A \ matrix_B;
 a_Rao = coeffs(1); b_Rao = coeffs(2); c_Rao = coeffs(3);
+
 % Encoder loop
 for k = 1:length(pos_i)
-    x = pos_i(k);
-    if x < x_conv_start % chamber
-        pos_j(k) = Rc;
-    elseif x >= x_conv_start && x < x_conv_tangent % straight converging cone
-        pos_j(k) = Rc - tan(conv_angle) * (x - x_conv_start);
-    elseif x >= x_conv_tangent && x < 0 % converging throat arc
-        pos_j(k) = (Rt + R_curve) - sqrt((R_curve)^2 - x^2); % Rt + arc length - height of curve at point
-    elseif x >= 0 && x < xn % diverging throat arc
-        pos_j(k) = (Rt + 0.382*Rt) - sqrt((0.382*Rt)^2 - x^2);
-    else % Rao parabola approx
-        pos_j(k) = a_Rao * x^2 + b_Rao * x + c_Rao;
-    end
+    x = pos_i(k);
+    if x < x_chamber_end % chamber
+        pos_j(k) = Rc;
+    elseif x >= x_chamber_end && x < x_f_tangent
+        pos_j(k) = y_conv_fillet + sqrt(R_fillet^2 - (x - x_conv_fillet)^2);
+    elseif x >= x_f_tangent && x < x_conv_tangent % straight converging cone
+        pos_j(k) = y_f_tangent - tan(conv_angle) * (x - x_f_tangent);
+    elseif x >= x_conv_tangent && x < 0 % converging throat arc
+        pos_j(k) = (Rt + R_curve) - sqrt((R_curve)^2 - x^2); % Rt + arc length - height of curve at point
+    elseif x >= 0 && x < xn % diverging throat arc
+        pos_j(k) = (Rt + 0.382*Rt) - sqrt((0.382*Rt)^2 - x^2);
+    else % Rao parabola approx
+        pos_j(k) = a_Rao * x^2 + b_Rao * x + c_Rao;
+    end
 end
 
 %% Cooling Channel and Outer Jacket Geometry
@@ -134,6 +146,7 @@ end
 min_tol = 0.001; % m 3d printer tolerance
 D_gas = 2 * pos_j; % Array of gas-side diameter at every node
 D_t = 2 * Rt;
+D_t_us = D_t * 39.3701; % m - in
 h_channel = min_tol; % channel height (radial)
 wall_thickness = min_tol; % HW/CW
 w_rib = min_tol; % fixed, rib width
@@ -192,7 +205,16 @@ for k = 1:length(pos_i)
         M_local(k) = flowisentropic(gamma, AR_local(k), 'sup');
     end
 end
-M_chamber
+M_chamber =  flowisentropic(gamma, Rc^2/Rt^2, 'sub');
+M_ref = [M_chamber, 1.0, M_local(end)];
+
+cp_g_local = interp1(M_ref, cp_g_ref, M_local, 'linear', 'extrap');
+mu_g_local = interp1(M_ref, mu_g_ref, M_local, 'linear', 'extrap');
+k_g_local = interp1(M_ref, k_g_ref, M_local, 'linear', 'extrap');
+prandtl_g_local = interp1(M_ref, prandtl_ref, M_local, 'linear', 'extrap');
+
+Taw = T_stag * ((1 + prandtl_g_local.^(1/3).*((gamma - 1) / 2) .* M_local.^2) ...
+    ./ (1 + ((gamma - 1) / 2) .* M_local.^2));
 % Old code, doesn't work because interp1 need x values to be monotonically increasing, switch to using M_local
 %{ 
 AR_ref = [Rc^2/Rt^2, 1, eps];
@@ -365,6 +387,9 @@ while abs(P_error) > tol_P % Pressure guess loop
         surften = get_surften(P_loc);
         h_fg = get_h_fg(P_loc);
 
+        mu_g_local_us = mu_g_local(d) * 0.000145038; % Pa*s - (lb/in)*s
+        cp_g_local_us = cp_g_local(d) * 0.00023885; % J/(kg*K) - Btu/(lb*deg F)
+       
         % Dittus-Boelter for now, Gnielinsky later
         vel_c = mdot_f / (A_co(d) * rho_c);
         Re = (rho_c * D_channel_base(d) * vel_c) / mu_c;
@@ -409,9 +434,9 @@ while abs(P_error) > tol_P % Pressure guess loop
                 ((0.5 * T_hw_guess/T_stag * (1 + (gamma-1)/2 * M_local(d)^2) + 0.5)^0.68 *...
                 (1 + (gamma-1)/2 * M_local(d)^2)^0.12);
             h_g = ((0.026/D_t^0.2)*...
-                (((mu_g_local(d)^0.2)*cp_g_local(d))/prandtl_g_local(d)^0.6)*...
-                (Pc/cstar_act)^0.8)*...
-                (D_t/R_curve)^0.1*...
+                (((mu_g_local_us^0.2)*cp_g_local_us)/prandtl_g_local(d)^0.6)*...
+                (Pc_us/cstar_act_us)^0.8)*...
+                (D_t_us/R_curve_us)^0.1*...
                 (At/A_local(d))^0.9*...
                 sigma;
             
