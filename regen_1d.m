@@ -387,7 +387,7 @@ while abs(P_error) > tol_P % Pressure guess loop
         surften = get_surften(P_loc);
         h_fg = get_h_fg(P_loc);
 
-        mu_g_local_us = mu_g_local(d) * 0.000145038; % Pa*s - (lb/in)*s
+        mu_g_local_us = mu_g_local(d) * 0.0559974; % Pa*s - (lb/in)*s
         cp_g_local_us = cp_g_local(d) * 0.00023885; % J/(kg*K) - Btu/(lb*deg F)
        
         % Dittus-Boelter for now, Gnielinsky later
@@ -433,7 +433,7 @@ while abs(P_error) > tol_P % Pressure guess loop
             sigma = 1 / ...
                 ((0.5 * T_hw_guess/T_stag * (1 + (gamma-1)/2 * M_local(d)^2) + 0.5)^0.68 *...
                 (1 + (gamma-1)/2 * M_local(d)^2)^0.12);
-            h_g_us = ((0.026/D_t^0.2)*...
+            h_g_us = ((0.026/D_t_us^0.2)*...
                 (((mu_g_local_us^0.2)*cp_g_local_us)/prandtl_g_local(d)^0.6)*...
                 (Pc_us/cstar_act_us)^0.8)*...
                 (D_t_us/R_curve_us)^0.1*...
@@ -544,7 +544,7 @@ while abs(P_error) > tol_P % Pressure guess loop
 
         P_loss_mom = mdot_f^2*... % Assume den diff is negligible, unless can find a way to get next station den 
             (2/(A_c_cs*num_channel+A_c_cs_next*num_channel))*...
-            (1/(rho_c*A_c_cs_next*num_channel) - 1/(rho_c*A_c_cs*num_channel));
+            (1/(rho_c*A_c_cs*num_channel) - 1/(rho_c*A_c_cs_next*num_channel));
 
         P_loss_tot = P_loss_mom + P_loss_area + P_loss_viscous;
         P_loss_array(d) = P_loss_tot;
