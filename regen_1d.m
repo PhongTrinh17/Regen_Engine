@@ -1,12 +1,17 @@
 % Test script for 1d regen engine
 
 clc; clear; close all;
+set(groot, 'defaultFigureColor', 'w');
+set(groot, 'defaultAxesColor', 'w');
+set(groot, 'defaultAxesXColor', 'k');
+set(groot, 'defaultAxesYColor', 'k');
+set(groot, 'defaultTextColor', 'k');
 
 %% Basic Parameters
 
 F = 1480 * 4.44822; % Target thrust in N
 Pamb = 9.94; % psia At 10,500 ft altitude
-Tamb = 298; % K (from feed calc sheet)
+T_amb = 298; % K (from feed calc sheet)
 mfrac_eth = 0.75;
 mfrac_h2o = 1 - mfrac_eth;
 oxidizer = 'LOX';
@@ -61,6 +66,7 @@ P_target = Pc + dP_inj; % Pa manifold pressure (target value)
 %% Throat Geometry (Rao)
 At = (cstar_act * mdot_total)/Pc; % m^2
 Rt = sqrt(At/pi); % m
+R_curve = 1.5 * Rt;
 
 %% Diverging Geometry
 %Me = sqrt((2/(gamma-1))*((Pc_us/Pamb)^((gamma - 1)/gamma) - 1));
@@ -78,8 +84,8 @@ L_star = 40; % in, optimal for ethanol/lox
 id_chamber = 4.75; % in, heritage
 V_total = convlength(L_star, 'in', 'm') * At; % m^3
 Rc = convlength(id_chamber / 2, 'in', 'm'); % m
-x_conv_tangent = -(1.5*Rt) * sin(conv_angle);
-y_conv_tangent = Rt + (1.5 * Rt) * (1 - cos(conv_angle));
+x_conv_tangent = -(R_curve) * sin(conv_angle);
+y_conv_tangent = Rt + (R_curve) * (1 - cos(conv_angle));
 x_conv_start = x_conv_tangent - (Rc - y_conv_tangent) / tan(conv_angle);
 len_conv = -x_conv_start; % m
 V_conv = (1/3 * pi * len_conv) * (Rc^2 + Rt^2 + Rc*Rt); % m^3
@@ -115,7 +121,7 @@ for k = 1:length(pos_i)
     elseif x >= x_conv_start && x < x_conv_tangent % straight converging cone
         pos_j(k) = Rc - tan(conv_angle) * (x - x_conv_start);
     elseif x >= x_conv_tangent && x < 0 % converging throat arc
-        pos_j(k) = (Rt + 1.5*Rt) - sqrt((1.5*Rt)^2 - x^2); % Rt + arc length - height of curve at point
+        pos_j(k) = (Rt + R_curve) - sqrt((R_curve)^2 - x^2); % Rt + arc length - height of curve at point
     elseif x >= 0 && x < xn % diverging throat arc
         pos_j(k) = (Rt + 0.382*Rt) - sqrt((0.382*Rt)^2 - x^2);
     else % Rao parabola approx
@@ -155,6 +161,7 @@ hold on; grid on;
 plot(pos_i, pos_j, 'k', 'LineWidth', 2, 'DisplayName', 'Hot Wall');
 plot(pos_i, -pos_j, 'k', 'LineWidth', 2, 'HandleVisibility','off');
 
+r_channel_base = D_channel_base ./ 2;
 plot(pos_i, r_channel_base, 'b--', 'LineWidth', 1.5, 'DisplayName', 'Cold Wall');
 plot(pos_i, -r_channel_base, 'b--', 'LineWidth', 1.5, 'HandleVisibility', 'off');
 
@@ -167,11 +174,36 @@ xlabel('Axial Position x (m)');
 ylabel('Radial Position y (m)');
 axis equal;
 xline(0, 'r--', 'Throat', 'LabelVerticalAlignment', 'bottom', 'HandleVisibility', 'off');
+exportgraphics(gcf, 'geometry.pdf', 'ContentType','vector');
 hold off;
 
 
 %% Gas Properties
 % 1D interpolation from 3 CEA points for Cp, gamma, k, mu for Bartz
+M_local = zeros(size(pos_i));
+A_local = D_gas.^2 .* (pi/4);
+AR_local = A_local ./ At;
+for k = 1:length(pos_i)
+    if pos_i(k) < 0 % Chamber and Converging
+        M_local(k) = flowisentropic(gamma, AR_local(k), 'sub');
+    elseif pos_i(k) == 0
+        M_local(k) = 1.0;
+    else
+        M_local(k) = flowisentropic(gamma, AR_local(k), 'sup');
+    end
+end
+M_chamber =  flowisentropic(gamma, Rc^2/Rt^2, 'sub');
+M_ref = [M_chamber, 1.0, M_local(end)];
+
+cp_g_local = interp1(M_ref, cp_g_ref, M_local, 'linear', 'extrap');
+mu_g_local = interp1(M_ref, mu_g_ref, M_local, 'linear', 'extrap');
+k_g_local = interp1(M_ref, k_g_ref, M_local, 'linear', 'extrap');
+prandtl_g_local = interp1(M_ref, prandtl_ref, M_local, 'linear', 'extrap');
+
+Taw = T_stag * ((1 + prandtl_g_local.^(1/3).*((gamma - 1) / 2) .* M_local.^2) ...
+    ./ (1 + ((gamma - 1) / 2) .* M_local.^2));
+% Old code, doesn't work because interp1 need x values to be monotonically increasing, switch to using M_local
+%{ 
 AR_ref = [Rc^2/Rt^2, 1, eps];
 A_local = D_gas.^2 .* (pi/4);
 AR_local = A_local ./ At;
@@ -192,6 +224,7 @@ for k = 1:length(pos_i)
 end
 Taw = T_stag * ((1 + prandtl_g_local.^(1/3).*((gamma - 1) / 2) .* M_local.^2) ...
     ./ (1 + ((gamma - 1) / 2) .* M_local.^2));
+%}
 
 %% Coolant Properties
 
@@ -226,7 +259,7 @@ else % create tables first time (delete file when changing parameters)
     % Generate values
     for i = 1:res
         P_val = P_vec(i);
-        if P_val < 6400000 % Ethanol critical pressure in Pa
+        if P_val < 6140000 % Ethanol critical pressure in Pa
             T_sat_eth = py.CoolProp.CoolProp.PropsSI('T','P',P_val,'Q',0, 'ethanol');
             T_sat_h2o = py.CoolProp.CoolProp.PropsSI('T','P',P_val,'Q',0, 'water');
             T_sat_grid(i) = mfrac_eth * T_sat_eth + mfrac_h2o * T_sat_h2o;
@@ -293,7 +326,7 @@ else % create tables first time (delete file when changing parameters)
     get_P_sat = griddedInterpolant(T_sat_clean, P_clean, 'linear', 'nearest');
 
     save(table_filename,'get_rho', 'get_cp', 'get_mu', 'get_k', 'get_T_sat', ...
-        'get_rho_l', 'get_rho_v', 'get_surften', 'get_h_fg', 'P_vec', 'T_vec')
+        'get_rho_l', 'get_rho_v', 'get_surften', 'get_h_fg', 'get_P_sat', 'P_vec', 'T_vec')
 end
 
 %% Material Properties (316 Stainless)
@@ -315,6 +348,7 @@ P_loss_array = zeros(size(pos_i));
 q_flux_array = zeros(size(pos_i));
 h_g_array = zeros(size(pos_i));
 h_c_array = zeros(size(pos_i));
+CHF_array = zeros(size(pos_i));
 
 %% Main Loop
 P_guess = convpres(500, 'psi', 'Pa');
@@ -342,9 +376,9 @@ while abs(P_error) > tol_P % Pressure guess loop
 
         % Dittus-Boelter for now, Gnielinsky later
         vel_c = mdot_f / (A_co(d) * rho_c);
-        Re = (rho_c * D_channel_base * vel_c) / mu_c;
+        Re = (rho_c * D_channel_base(d) * vel_c) / mu_c;
         Nu = 0.023 * Re^(0.8) * (cp_c * mu_c / k_c)^(0.34); % Dittus-Boelter
-        h_c = Nu * k_c / D_channel_base; % Coolant convection htc
+        h_c = Nu * k_c / D_channel_base(d); % Coolant convection htc
         h_c_array(d) = h_c;
         
         % Gas properties
@@ -358,9 +392,12 @@ while abs(P_error) > tol_P % Pressure guess loop
         ch = h_channel;
         D_h_loc = (2*cw*ch)/(cw+ch);
         A_c_cs = cw*ch; % Cross sectional area of channel
-        if (d ~= length(pos_i))
-            A_c_cs_next = w_channel(d+1)*h_channel;
-            D_h_loc_next = (2*w_channel(d+1)*h_channel/(w_channel(d+1)+h_channel));
+        if (d ~= 1) % If not at final chamber station
+            A_c_cs_next = w_channel(d-1)*h_channel;
+            D_h_loc_next = (2*w_channel(d-1)*h_channel/(w_channel(d-1)+h_channel));
+        else % At final station
+            A_c_cs_next = A_c_cs;
+            D_h_loc_next = D_h_loc;
         end
 
         % HW Temp Iteration
@@ -373,18 +410,18 @@ while abs(P_error) > tol_P % Pressure guess loop
         while abs(q_error) > tol_q
             iter_T = iter_T + 1;
             % Fin Efficiency
-            k_w_loc = interp1(k_w_ref_temps, k_w_ref, T_hw_guess, 'linear');
+            k_w_loc = interp1(k_w_ref_temps, k_w_ref, T_hw_guess, 'linear', 'extrap');
             fin_m = sqrt((2*h_c*(dx + w_rib))/(k_w_loc * dx * w_rib));
             fin_eff = tanh(fin_m * h_channel) / (fin_m * h_channel);
             % Gas convection HTC with Bartz
-            sigma = 1/... 
-                ((0.5*T_hw_guess/Taw_loc*(1+((gamma-1)*(M_local(d))/2)+0.5)^(0.68))*...
-                (1+0.5*(gamma-1)*M_local(d)^2)^0.12);
-            h_g = ((0.026/D_t^2)*...
+            sigma = 1 / ...
+                ((0.5 * T_hw_guess/T_stag * (1 + (gamma-1)/2 * M_local(d)^2) + 0.5)^0.68 *...
+                (1 + (gamma-1)/2 * M_local(d)^2)^0.12);
+            h_g = ((0.026/D_t^0.2)*...
                 (((mu_g_local(d)^0.2)*cp_g_local(d))/prandtl_g_local(d)^0.6)*...
-                ((Pc*9.8)/cstar_act)^0.8)*...
-                (D_t/R)^0.1*...
-                (At/A_g_loc)^0.9*...
+                (Pc/cstar_act)^0.8)*...
+                (D_t/R_curve)^0.1*...
+                (At/A_local(d))^0.9*...
                 sigma;
             
             q_1 = h_g*A_g_loc*(Taw_loc - T_hw_guess);
@@ -392,16 +429,16 @@ while abs(P_error) > tol_P % Pressure guess loop
             T_cw = T_hw_guess - (q_1*wall_thickness)/(k_w_loc*A_w_loc); % Cold wall temp derived from guess
             % For wall-coolant HT: t_i = wall_thickness, Nch = num_channel, Di = D_g_loc, Li = dx
             if (T_cw <= T_sat)
-                q_3 = (T_hw_guess-T_bulk)/...
-                    ((1/(h_c*dx*(2*fin_eff*ch+cw)))+...
-                    ((num_channel*log(1+2*wall_thickness/D_g_loc))/(2*pi*dx*k_w_loc)));
+                R_th = (1/(h_c*dx*(2*fin_eff*ch+cw)))+...
+                    ((num_channel*log(1+2*wall_thickness/D_g_loc))/(2*pi*dx*k_w_loc)); % single channel
+                q_3 = num_channel * (T_hw_guess-T_bulk) / R_th;
             else % Nucleate
                 P_sat_T_cw = get_P_sat(T_cw);
                 h_nb = 0.00122*...
                     (((k_c^0.79)*(cp_c^0.45)*(rho_c_l^0.49))/...
                     ((surften^0.5)*(mu_c^0.29)*(h_fg^0.24)*(rho_c_v^0.24)))*...
                     ((T_cw-T_sat)^0.24)*...
-                    (P_sat_T_cw - P_loc)^0.75;
+                    (max(0,P_sat_T_cw - P_loc))^0.75;
                 S = 1/(1+(2.53*(10^-6))*(Re^1.17));
                 q_3 = A_co(d)*(h_c*(T_cw-T_bulk)+S*h_nb*(T_cw-T_sat));
             end
@@ -414,12 +451,19 @@ while abs(P_error) > tol_P % Pressure guess loop
                 T_hw_guess = T_hw_prev_guess;
                 T_hw_prev_guess = temp_T;
             else
-                T_next = T_hw_guess - current_q_error * (T_hw_guess - T_hw_prev_guess) / (current_q_error - q_prev_error);
+                T_next = T_hw_guess - current_q_error * (T_hw_guess - T_hw_prev_guess) / (current_q_error - q_prev_error + 1e-10); % small buffer to avoid divide by 0
+                T_next = max(T_bulk + 1, min(T_next, Taw_loc - 1));
                 T_hw_prev_guess = T_hw_guess;
                 q_prev_error = current_q_error;
                 T_hw_guess = T_next;
             end
             q_error = current_q_error;
+
+            % Break
+            if iter_T > 100
+                disp('T_hw failed to converge at station d =' + d);
+                break;
+            end
         end
 
         T_hw_array(d) = T_hw_guess;
@@ -430,9 +474,9 @@ while abs(P_error) > tol_P % Pressure guess loop
         q_flux = q_1/(pi*(D_g_loc+wall_thickness*2)*dx);
         q_flux_array(d) = q_flux;
         F_p = 1.17-8.56*(10^(-4))*convpres(P_loc, 'Pa', 'psi');
-        CHF_base = 0.1003+0.05264*sqrt(convvel(vel_c, 'm/s', 'ft/s')*...
-            (convtemp(T_sat, 'K', 'F')-convtemp(T_bulk, 'K', 'F')));
-        CHF = CHF_base*F_p*1635000;
+        CHF_base = 0.1003+0.05264*sqrt(max(0,convvel(vel_c, 'm/s', 'ft/s')*...
+            (convtemp(T_sat, 'K', 'F')-convtemp(T_bulk, 'K', 'F'))));
+        CHF_array(d) = CHF_base*F_p*1635000;
         %{
         if (q_flux >= CHF) %prob change this to smth else
             error('CHF exceeded at station ' + d);
@@ -447,19 +491,24 @@ while abs(P_error) > tol_P % Pressure guess loop
             f_guess = 64/Re; % Initial guess
             f_error = realmax;
             tol_f = 0.0001;
+            iter_F = 0;
             while abs(f_error) > tol_f
+                iter_F = iter_F + 1;
                 f_calc = 1/(-2*log10(2.51/(Re*sqrt(f_guess))+r/(D_h_loc*3.72)))^2;
                 f_error = f_calc - f_guess;
-                f_guess = f_calc;
+                f_guess = 0.5*f_guess + 0.5*f_calc; % avoid overshooting
+                if iter_F > 100
+                    break;
+                end
             end
         elseif (Re<2300) % Laminar
-            f = 64/Re;
+            f_calc = 64/Re;
         else
-            f = 0.02783 + (7.17*10^-6)*(Re - 2300);
+            f_calc = 0.02783 + (7.17*10^-6)*(Re - 2300);
         end
         
         % Calculate pressure losses 
-        P_loss_viscous = (f*rho_c*vel_c^2*dx)/(2*D_h_loc);
+        P_loss_viscous = (f_calc*rho_c*vel_c^2*dx)/(2*D_h_loc);
 
         if (d ~= length(pos_i))
             if (A_c_cs < A_c_cs_next)
@@ -478,7 +527,7 @@ while abs(P_error) > tol_P % Pressure guess loop
 
         P_loss_mom = mdot_f^2*... % Assume den diff is negligible, unless can find a way to get next station den 
             (2/(A_c_cs*num_channel+A_c_cs_next*num_channel))*...
-            (1/(rho_c*A_c_cs*num_channel) - 1/(rho_c*A_c_cs_next*num_channel));
+            (1/(rho_c*A_c_cs_next*num_channel) - 1/(rho_c*A_c_cs*num_channel));
 
         P_loss_tot = P_loss_mom + P_loss_area + P_loss_viscous;
         P_loss_array(d) = P_loss_tot;
@@ -494,12 +543,18 @@ while abs(P_error) > tol_P % Pressure guess loop
         P_guess = P_prev_guess;
         P_prev_guess = temp_P;
     else
-        P_next = P_guess - current_P_error * (P_guess - P_prev_guess) / (current_P_error - P_prev_error);
+        P_next = P_guess - current_P_error * (P_guess - P_prev_guess) / (current_P_error - P_prev_error + 1e-10);
+        % Prevent negative or physically impossible pressure guesses
+        P_next = max(Pamb * 6894.75, P_next);
         P_prev_guess = P_guess;
         P_prev_error = current_P_error;
         P_guess = P_next;
     end
     P_error = current_P_error;
+    if iter_P > 50
+        disp('Pressure loop failed to converge');
+        break;
+    end
 end
 
 %% Plots
@@ -515,6 +570,7 @@ title('Temperatures')
 xlabel('Axial Position x (m)');
 ylabel('Temperature (K)');
 xline(0, 'k--', 'Throat', 'LabelVerticalAlignment', 'bottom', 'HandleVisibility', 'off');
+exportgraphics(gcf, 'temperatures.pdf', 'ContentType','vector');
 hold off;
 
 % Pressure
@@ -525,17 +581,21 @@ title('Coolant Static Pressure')
 xlabel('Axial Position x (m)');
 ylabel('Pressure (psi)');
 xline(0, 'k--', 'Throat', 'LabelVerticalAlignment', 'bottom', 'HandleVisibility', 'off');
+exportgraphics(gcf, 'pressure.pdf', 'ContentType','vector');
+
 hold off;
 
 % Heat Flux
 figure('Name', 'HeatFlux', 'Color', 'w');
 hold on; grid on;
 plot(pos_i, q_flux_array, 'r', 'LineWidth', 2);
+plot(pos_i, CHF_array, 'k--', 'LineWidth', 1.5, 'DisplayName', 'CHF Limit');
 title('Coolant Heat Flux')
 xlabel('Axial Position x (m)');
 ylabel('Heat Flux (W/m^2)');
 xline(0, 'k--', 'Throat', 'LabelVerticalAlignment', 'bottom', 'HandleVisibility', 'off');
-yline(CHF, 'k--', 'CHF', 'LabelHorizontalAlignment','left', 'HandleVisibility','off');
+exportgraphics(gcf, 'heatflux.pdf', 'ContentType','vector');
+
 hold off;
 
 % HTC
@@ -546,6 +606,7 @@ title('Gas Heat Transfer Coefficient')
 xlabel('Axial Position x (m)');
 ylabel('Heat Transfer Coefficient (W/m^2*K)');
 xline(0, 'k--', 'Throat', 'LabelVerticalAlignment', 'bottom', 'HandleVisibility', 'off');
+exportgraphics(gcf, 'gashtc.pdf', 'ContentType','vector');
 hold off;
 
 figure('Name', 'CoolantHTC', 'Color', 'w');
@@ -555,4 +616,5 @@ title('Coolant Heat Transfer Coefficient')
 xlabel('Axial Position x (m)');
 ylabel('Heat Transfer Coefficient (W/m^2*K)');
 xline(0, 'k--', 'Throat', 'LabelVerticalAlignment', 'bottom', 'HandleVisibility', 'off');
+exportgraphics(gcf, 'coolhtc.pdf', 'ContentType','vector');
 hold off;
