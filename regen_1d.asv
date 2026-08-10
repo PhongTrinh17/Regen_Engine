@@ -125,20 +125,20 @@ a_Rao = coeffs(1); b_Rao = coeffs(2); c_Rao = coeffs(3);
 
 % Encoder loop
 for k = 1:length(pos_i)
-    x = pos_i(k);
-    if x < x_chamber_end % chamber
-        pos_j(k) = Rc;
-    elseif x >= x_chamber_end && x < x_f_tangent
-        pos_j(k) = y_conv_fillet + sqrt(R_fillet^2 - (x - x_conv_fillet)^2);
-    elseif x >= x_f_tangent && x < x_conv_tangent % straight converging cone
-        pos_j(k) = y_f_tangent - tan(conv_angle) * (x - x_f_tangent);
-    elseif x >= x_conv_tangent && x < 0 % converging throat arc
-        pos_j(k) = (Rt + R_curve) - sqrt((R_curve)^2 - x^2); % Rt + arc length - height of curve at point
-    elseif x >= 0 && x < xn % diverging throat arc
-        pos_j(k) = (Rt + 0.382*Rt) - sqrt((0.382*Rt)^2 - x^2);
-    else % Rao parabola approx
-        pos_j(k) = a_Rao * x^2 + b_Rao * x + c_Rao;
-    end
+    x = pos_i(k);
+    if x < x_chamber_end % chamber
+        pos_j(k) = Rc;
+    elseif x >= x_chamber_end && x < x_f_tangent
+        pos_j(k) = y_conv_fillet + sqrt(R_fillet^2 - (x - x_conv_fillet)^2);
+    elseif x >= x_f_tangent && x < x_conv_tangent % straight converging cone
+        pos_j(k) = y_f_tangent - tan(conv_angle) * (x - x_f_tangent);
+    elseif x >= x_conv_tangent && x < 0 % converging throat arc
+        pos_j(k) = (Rt + R_curve) - sqrt((R_curve)^2 - x^2); % Rt + arc length - height of curve at point
+    elseif x >= 0 && x < xn % diverging throat arc
+        pos_j(k) = (Rt + 0.382*Rt) - sqrt((0.382*Rt)^2 - x^2);
+    else % Rao parabola approx
+        pos_j(k) = a_Rao * x^2 + b_Rao * x + c_Rao;
+    end
 end
 
 %% Cooling Channel and Outer Jacket Geometry
@@ -376,6 +376,23 @@ while abs(P_error) > tol_P % Pressure guess loop
     T_bulk = T_amb; 
 
     for d = length(pos_i):-1:1 % Axial marching loop
+        % Local Geometry, add channel height array earlier
+        A_g_loc = A_gas(d);
+        A_w_loc = A_w(d);
+        D_g_loc = D_gas(d);
+        cw = w_channel(d);
+        ch = h_channel;
+        D_h_loc = (2*cw*ch)/(cw+ch);
+        A_c_cs = cw*ch; % Cross sectional area of channel
+        A_c_cs_tot = A_c_cs * num_channel;
+        if (d ~= 1) % If not at final chamber station
+            A_c_cs_next = w_channel(d-1)*h_channel;
+            D_h_loc_next = (2*w_channel(d-1)*h_channel/(w_channel(d-1)+h_channel));
+        else % At final station
+            A_c_cs_next = A_c_cs;
+            D_h_loc_next = D_h_loc;
+        end
+
         % Coolant properties
         rho_c = get_rho(P_loc, T_bulk);
         cp_c = get_cp(P_loc, T_bulk);
@@ -387,34 +404,19 @@ while abs(P_error) > tol_P % Pressure guess loop
         surften = get_surften(P_loc);
         h_fg = get_h_fg(P_loc);
 
-        mu_g_local_us = mu_g_local(d) * 0.000145038; % Pa*s - (lb/in)*s
+        mu_g_local_us = mu_g_local(d) * 0.0559974; % Pa*s - (lb/in)*s
         cp_g_local_us = cp_g_local(d) * 0.00023885; % J/(kg*K) - Btu/(lb*deg F)
        
         % Dittus-Boelter for now, Gnielinsky later
-        vel_c = mdot_f / (A_co(d) * rho_c);
-        Re = (rho_c * D_channel_base(d) * vel_c) / mu_c;
-        Nu = 0.023 * Re^(0.8) * (cp_c * mu_c / k_c)^(0.34); % Dittus-Boelter
-        h_c = Nu * k_c / D_channel_base(d); % Coolant convection htc
+        vel_c = mdot_f / (A_c_cs_tot * rho_c); % coolant cs area instead
+        %Re = (rho_c * D_channel_base(d) * vel_c) / mu_c;
+        Re = (rho_c * D_h_loc * vel_c) / mu_c;
+        Nu = 0.023 * Re^(0.8) * (cp_c * mu_c / k_c)^(0.4); % Colburn
+        %h_c = Nu * k_c / D_channel_base(d); % Coolant convection htc hydraulic diameter
         h_c_array(d) = h_c;
         
         % Gas properties
         Taw_loc = Taw(d); % Local adiabatic wall temp
- 
-        % Local Geometry, add channel height array earlier
-        A_g_loc = A_gas(d);
-        A_w_loc = A_w(d);
-        D_g_loc = D_gas(d);
-        cw = w_channel(d);
-        ch = h_channel;
-        D_h_loc = (2*cw*ch)/(cw+ch);
-        A_c_cs = cw*ch; % Cross sectional area of channel
-        if (d ~= 1) % If not at final chamber station
-            A_c_cs_next = w_channel(d-1)*h_channel;
-            D_h_loc_next = (2*w_channel(d-1)*h_channel/(w_channel(d-1)+h_channel));
-        else % At final station
-            A_c_cs_next = A_c_cs;
-            D_h_loc_next = D_h_loc;
-        end
 
         % HW Temp Iteration
         T_hw_guess = 1315; % Initial Guess (1.25 FOS applied to material melting point)
@@ -433,12 +435,13 @@ while abs(P_error) > tol_P % Pressure guess loop
             sigma = 1 / ...
                 ((0.5 * T_hw_guess/T_stag * (1 + (gamma-1)/2 * M_local(d)^2) + 0.5)^0.68 *...
                 (1 + (gamma-1)/2 * M_local(d)^2)^0.12);
-            h_g = ((0.026/D_t^0.2)*...
+            h_g_us = ((0.026/D_t_us^0.2)*...
                 (((mu_g_local_us^0.2)*cp_g_local_us)/prandtl_g_local(d)^0.6)*...
                 (Pc_us/cstar_act_us)^0.8)*...
                 (D_t_us/R_curve_us)^0.1*...
                 (At/A_local(d))^0.9*...
                 sigma;
+            h_g = h_g_us * 2943611.72;
             
             q_1 = h_g*A_g_loc*(Taw_loc - T_hw_guess);
 
@@ -543,7 +546,7 @@ while abs(P_error) > tol_P % Pressure guess loop
 
         P_loss_mom = mdot_f^2*... % Assume den diff is negligible, unless can find a way to get next station den 
             (2/(A_c_cs*num_channel+A_c_cs_next*num_channel))*...
-            (1/(rho_c*A_c_cs_next*num_channel) - 1/(rho_c*A_c_cs*num_channel));
+            (1/(rho_c*A_c_cs*num_channel) - 1/(rho_c*A_c_cs_next*num_channel));
 
         P_loss_tot = P_loss_mom + P_loss_area + P_loss_viscous;
         P_loss_array(d) = P_loss_tot;

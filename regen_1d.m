@@ -376,6 +376,23 @@ while abs(P_error) > tol_P % Pressure guess loop
     T_bulk = T_amb; 
 
     for d = length(pos_i):-1:1 % Axial marching loop
+        % Local Geometry, add channel height array earlier
+        A_g_loc = A_gas(d);
+        A_w_loc = A_w(d);
+        D_g_loc = D_gas(d);
+        cw = w_channel(d);
+        ch = h_channel;
+        D_h_loc = (2*cw*ch)/(cw+ch);
+        A_c_cs = cw*ch; % Cross sectional area of channel
+        A_c_cs_tot = A_c_cs * num_channel;
+        if (d ~= 1) % If not at final chamber station
+            A_c_cs_next = w_channel(d-1)*h_channel;
+            D_h_loc_next = (2*w_channel(d-1)*h_channel/(w_channel(d-1)+h_channel));
+        else % At final station
+            A_c_cs_next = A_c_cs;
+            D_h_loc_next = D_h_loc;
+        end
+
         % Coolant properties
         rho_c = get_rho(P_loc, T_bulk);
         cp_c = get_cp(P_loc, T_bulk);
@@ -391,30 +408,14 @@ while abs(P_error) > tol_P % Pressure guess loop
         cp_g_local_us = cp_g_local(d) * 0.00023885; % J/(kg*K) - Btu/(lb*deg F)
        
         % Dittus-Boelter for now, Gnielinsky later
-        vel_c = mdot_f / (A_co(d) * rho_c);
-        Re = (rho_c * D_channel_base(d) * vel_c) / mu_c;
-        Nu = 0.023 * Re^(0.8) * (cp_c * mu_c / k_c)^(0.34); % Dittus-Boelter
-        h_c = Nu * k_c / D_channel_base(d); % Coolant convection htc
+        vel_c = mdot_f / (A_c_cs_tot * rho_c); % coolant cs area instead
+        Re = (rho_c * D_h_loc * vel_c) / mu_c;
+        Nu = 0.023 * Re^(0.8) * (cp_c * mu_c / k_c)^(0.4); % Colburn
+        h_c = Nu * k_c / D_h_loc; % Coolant convection htc hydraulic diameter
         h_c_array(d) = h_c;
         
         % Gas properties
         Taw_loc = Taw(d); % Local adiabatic wall temp
- 
-        % Local Geometry, add channel height array earlier
-        A_g_loc = A_gas(d);
-        A_w_loc = A_w(d);
-        D_g_loc = D_gas(d);
-        cw = w_channel(d);
-        ch = h_channel;
-        D_h_loc = (2*cw*ch)/(cw+ch);
-        A_c_cs = cw*ch; % Cross sectional area of channel
-        if (d ~= 1) % If not at final chamber station
-            A_c_cs_next = w_channel(d-1)*h_channel;
-            D_h_loc_next = (2*w_channel(d-1)*h_channel/(w_channel(d-1)+h_channel));
-        else % At final station
-            A_c_cs_next = A_c_cs;
-            D_h_loc_next = D_h_loc;
-        end
 
         % HW Temp Iteration
         T_hw_guess = 1315; % Initial Guess (1.25 FOS applied to material melting point)
