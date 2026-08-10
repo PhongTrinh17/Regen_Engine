@@ -83,11 +83,18 @@ conv_angle = deg2rad(45); % deg, standard
 L_star = 40; % in, optimal for ethanol/lox
 id_chamber = 4.75; % in, heritage
 V_total = convlength(L_star, 'in', 'm') * At; % m^3
-Rc = convlength(id_chamber / 2, 'in', 'm'); % m
+Rc = convlength(id_chamber / 2, 'in', 'm'); % m, chamber radius
 x_conv_tangent = -(R_curve) * sin(conv_angle);
 y_conv_tangent = Rt + (R_curve) * (1 - cos(conv_angle));
-x_conv_start = x_conv_tangent - (Rc - y_conv_tangent) / tan(conv_angle);
-len_conv = -x_conv_start; % m
+% 1.5*Rt converging fillet
+R_fillet = Rt;
+y_conv_fillet = Rc - R_fillet; % center height of fillet circle
+y_f_tangent = y_conv_fillet + R_fillet*cos(conv_angle);
+x_f_tangent = x_conv_tangent - (y_f_tangent - y_conv_tangent) / tan(conv_angle);
+x_conv_fillet = x_f_tangent - R_fillet * sin(conv_angle); % x center of fillet circle
+x_chamber_end = x_conv_fillet;
+
+len_conv = -x_chamber_end; % m
 V_conv = (1/3 * pi * len_conv) * (Rc^2 + Rt^2 + Rc*Rt); % m^3
 V_chamber = V_total - V_conv;
 len_chamber = V_chamber/(pi*Rc^2);
@@ -116,10 +123,12 @@ a_Rao = coeffs(1); b_Rao = coeffs(2); c_Rao = coeffs(3);
 % Encoder loop
 for k = 1:length(pos_i)
     x = pos_i(k);
-    if x < x_conv_start % chamber
+    if x < x_chamber_end % chamber
         pos_j(k) = Rc;
-    elseif x >= x_conv_start && x < x_conv_tangent % straight converging cone
-        pos_j(k) = Rc - tan(conv_angle) * (x - x_conv_start);
+    elseif x >= x_chamber_end && x < x_f_tangent
+        pos_j(k) = y_conv_fillet + sqrt(R_fillet^2 - (x - x_conv_fillet)^2);
+    elseif x >= x_f_tangent && x < x_conv_tangent % straight converging cone
+        pos_j(k) = y_f_tangent - tan(conv_angle) * (x - x_f_tangent);
     elseif x >= x_conv_tangent && x < 0 % converging throat arc
         pos_j(k) = (Rt + R_curve) - sqrt((R_curve)^2 - x^2); % Rt + arc length - height of curve at point
     elseif x >= 0 && x < xn % diverging throat arc
@@ -178,6 +187,7 @@ exportgraphics(gcf, 'geometry.pdf', 'ContentType','vector');
 hold off;
 
 
+%{
 %% Gas Properties
 % 1D interpolation from 3 CEA points for Cp, gamma, k, mu for Bartz
 M_local = zeros(size(pos_i));
@@ -618,3 +628,5 @@ ylabel('Heat Transfer Coefficient (W/m^2*K)');
 xline(0, 'k--', 'Throat', 'LabelVerticalAlignment', 'bottom', 'HandleVisibility', 'off');
 exportgraphics(gcf, 'coolhtc.pdf', 'ContentType','vector');
 hold off;
+
+%}
