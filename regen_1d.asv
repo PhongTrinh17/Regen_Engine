@@ -407,12 +407,33 @@ while abs(P_error) > tol_P % Pressure guess loop
         mu_g_local_us = mu_g_local(d) * 0.0559974; % Pa*s - (lb/in)*s
         cp_g_local_us = cp_g_local(d) * 0.00023885; % J/(kg*K) - Btu/(lb*deg F)
        
-        % Dittus-Boelter for now, Gnielinsky later
         vel_c = mdot_f / (A_c_cs_tot * rho_c); % coolant cs area instead
-        %Re = (rho_c * D_channel_base(d) * vel_c) / mu_c;
         Re = (rho_c * D_h_loc * vel_c) / mu_c;
-        Nu = 0.023 * Re^(0.8) * (cp_c * mu_c / k_c)^(0.4); % Colburn
-        %h_c = Nu * k_c / D_channel_base(d); % Coolant convection htc hydraulic diameter
+
+        if (Re>4000) % Turbulent
+            f_guess = 64/Re; % Initial guess
+            f_error = realmax;
+            tol_f = 0.0001;
+            iter_F = 0;
+            while abs(f_error) > tol_f
+                iter_F = iter_F + 1;
+                f_calc = 1/(-2*log10(2.51/(Re*sqrt(f_guess))+r/(D_h_loc*3.72)))^2;
+                f_error = f_calc - f_guess;
+                f_guess = 0.5*f_guess + 0.5*f_calc; % avoid overshooting
+                if iter_F > 100
+                    break;
+                end
+            end
+        elseif (Re<2300) % Laminar
+            f_calc = 64/Re;
+        else
+            f_calc = 0.02783 + (7.17*10^-6)*(Re - 2300);
+        end
+
+        Pr = (cp_c*mu_c)/k_c;
+        Nu = ((f_calc/8)*(Re-1000)*Pr)/...
+            (1+12.7*(f_calc/8)^0.5*(Pr^(2/3)-1)); % Gnielinski 
+        h_c = Nu * k_c / D_h_loc; % Coolant convection htc hydraulic diameter
         h_c_array(d) = h_c;
         
         % Gas properties
@@ -445,11 +466,13 @@ while abs(P_error) > tol_P % Pressure guess loop
             
             q_1 = h_g*A_g_loc*(Taw_loc - T_hw_guess);
 
-            T_cw = T_hw_guess - (q_1*wall_thickness)/(k_w_loc*A_w_loc); % Cold wall temp derived from guess
+            T_cw = T_hw_guess - (q_1)*...
+                (num_channel*log(1+2*wall_thickness/D_g_loc))/(2*pi*dx*k_w_loc); % Cold wall temp derived from guess, change dx to reald 
+
             % For wall-coolant HT: t_i = wall_thickness, Nch = num_channel, Di = D_g_loc, Li = dx
             if (T_cw <= T_sat)
                 R_th = (1/(h_c*dx*(2*fin_eff*ch+cw)))+...
-                    ((num_channel*log(1+2*wall_thickness/D_g_loc))/(2*pi*dx*k_w_loc)); % single channel
+                    ((num_channel*log(1+2*wall_thickness/D_g_loc))/(2*pi*dx*k_w_loc));
                 q_3 = num_channel * (T_hw_guess-T_bulk) / R_th;
             else % Nucleate
                 P_sat_T_cw = get_P_sat(T_cw);
@@ -505,37 +528,17 @@ while abs(P_error) > tol_P % Pressure guess loop
         % Prepare for next station
         T_bulk_array(d) = T_bulk; % Store the updated bulk temperature
         T_bulk = T_bulk + q_1/(mdot_f*cp_c); % K
-
-        if (Re>4000) % Turbulent
-            f_guess = 64/Re; % Initial guess
-            f_error = realmax;
-            tol_f = 0.0001;
-            iter_F = 0;
-            while abs(f_error) > tol_f
-                iter_F = iter_F + 1;
-                f_calc = 1/(-2*log10(2.51/(Re*sqrt(f_guess))+r/(D_h_loc*3.72)))^2;
-                f_error = f_calc - f_guess;
-                f_guess = 0.5*f_guess + 0.5*f_calc; % avoid overshooting
-                if iter_F > 100
-                    break;
-                end
-            end
-        elseif (Re<2300) % Laminar
-            f_calc = 64/Re;
-        else
-            f_calc = 0.02783 + (7.17*10^-6)*(Re - 2300);
-        end
         
         % Calculate pressure losses 
         P_loss_viscous = (f_calc*rho_c*vel_c^2*dx)/(2*D_h_loc);
 
         if (d ~= length(pos_i))
             if (A_c_cs < A_c_cs_next)
-                K = ((D_h_loc/D_h_loc_next)^2-1)^2;
+                K = ((A_c_cs/A_c_cs_next)^2-1)^2;
             elseif (A_c_cs > A_c_cs_next)
-                K = 0.5-0.167*(D_h_loc_next/D_h_loc)-...
-                    0.125*(D_h_loc_next/D_h_loc)^2-...
-                    0.208*(D_h_loc_next/D_h_loc)^3;
+                K = 0.5-0.167*(A_cs_next/A_c_cs)-...
+                    0.125*(A_cs_next/A_c_cs)^2-...
+                    0.208*(A_cs_next/A_c_cs)^3;
             else
                 K = 0;
             end
