@@ -363,6 +363,11 @@ h_g_array = zeros(size(pos_i));
 h_c_array = zeros(size(pos_i));
 CHF_array = zeros(size(pos_i));
 
+% Test Arrays (remove when done)
+f_array = zeros(size(pos_i));
+Nu_array = zeros(size(pos_i));
+T_sat_array = zeros(size(pos_i));
+
 %% Main Loop
 P_guess = convpres(500, 'psi', 'Pa');
 P_prev_guess = convpres(450, 'psi', 'Pa');
@@ -417,7 +422,7 @@ while abs(P_error) > tol_P % Pressure guess loop
             iter_F = 0;
             while abs(f_error) > tol_f
                 iter_F = iter_F + 1;
-                f_calc = 1/(-2*log10(2.51/(Re*sqrt(f_guess))+r/(D_h_loc*3.72)))^2;
+                f_calc = 1/(-2*log10(2.5226/(Re*sqrt(f_guess))+r/(D_h_loc*3.7065)))^2;
                 f_error = f_calc - f_guess;
                 f_guess = 0.5*f_guess + 0.5*f_calc; % avoid overshooting
                 if iter_F > 100
@@ -426,15 +431,18 @@ while abs(P_error) > tol_P % Pressure guess loop
             end
         elseif (Re<2300) % Laminar
             f_calc = 64/Re;
-        else
+        else % Transition
             f_calc = 0.02783 + (7.17*10^-6)*(Re - 2300);
         end
+
+        f_array(d) = f_calc;
 
         Pr = (cp_c*mu_c)/k_c;
         Nu = ((f_calc/8)*(Re-1000)*Pr)/...
             (1+12.7*(f_calc/8)^0.5*(Pr^(2/3)-1)); % Gnielinski 
         h_c = Nu * k_c / D_h_loc; % Coolant convection htc hydraulic diameter
         h_c_array(d) = h_c;
+        Nu_array(d) = Nu;
         
         % Gas properties
         Taw_loc = Taw(d); % Local adiabatic wall temp
@@ -454,20 +462,19 @@ while abs(P_error) > tol_P % Pressure guess loop
             fin_eff = tanh(fin_m * h_channel) / (fin_m * h_channel);
             % Gas convection HTC with Bartz
             sigma = 1 / ...
-                ((0.5 * T_hw_guess/T_stag * (1 + (gamma-1)/2 * M_local(d)^2) + 0.5)^0.68 *...
+                ((0.5 * (T_hw_guess/T_stag) * (1 + (gamma-1)/2 * M_local(d)^2) + 0.5)^0.68 *...
                 (1 + (gamma-1)/2 * M_local(d)^2)^0.12);
-            h_g_us = ((0.026/D_t_us^0.2)*...
-                (((mu_g_local_us^0.2)*cp_g_local_us)/prandtl_g_local(d)^0.6)*...
-                (Pc_us/cstar_act_us)^0.8)*...
-                (D_t_us/R_curve_us)^0.1*...
+            h_g = ((0.026/D_t^0.2)*...
+                ((mu_g_local(d)^0.2*cp_g_local(d))/prandtl_g_local(d)^0.6)*...
+                (Pc/cstar_act)^0.8)*...
+                (D_t/R_curve)^0.1*...
                 (At/A_local(d))^0.9*...
                 sigma;
-            h_g = h_g_us * 2943611.72;
             
             q_1 = h_g*A_g_loc*(Taw_loc - T_hw_guess);
 
             T_cw = T_hw_guess - (q_1)*...
-                (num_channel*log(1+2*wall_thickness/D_g_loc))/(2*pi*dx*k_w_loc); % Cold wall temp derived from guess, change dx to real dl
+                log(1+2*wall_thickness/D_g_loc)/(2*pi*dx*k_w_loc); % Cold wall temp derived from guess, change dx to real dl
 
             % For wall-coolant HT: t_i = wall_thickness, Nch = num_channel, Di = D_g_loc, Li = dx
             if (T_cw <= T_sat)
@@ -515,10 +522,11 @@ while abs(P_error) > tol_P % Pressure guess loop
         % Check CHF
         q_flux = q_1/(pi*(D_g_loc+wall_thickness*2)*dx);
         q_flux_array(d) = q_flux;
+        CHF_base = 0.1003+0.05264*sqrt(convvel(vel_c, 'm/s', 'ft/s')*...
+            (convtemp(T_sat, 'K', 'F')-convtemp(T_bulk, 'K', 'F')));
         F_p = 1.17-8.56*(10^(-4))*convpres(P_loc, 'Pa', 'psi');
-        CHF_base = 0.1003+0.05264*sqrt(max(0,convvel(vel_c, 'm/s', 'ft/s')*...
-            (convtemp(T_sat, 'K', 'F')-convtemp(T_bulk, 'K', 'F'))));
         CHF_array(d) = CHF_base*F_p*1635000;
+        T_sat_array(d) = T_sat;
         %{
         if (q_flux >= CHF) %prob change this to smth else
             error('CHF exceeded at station ' + d);
@@ -640,3 +648,30 @@ ylabel('Heat Transfer Coefficient (W/m^2*K)');
 xline(0, 'k--', 'Throat', 'LabelVerticalAlignment', 'bottom', 'HandleVisibility', 'off');
 exportgraphics(gcf, 'coolhtc.pdf', 'ContentType','vector');
 hold off;
+
+% Friction Factor
+figure('Name', 'Darcy Friction Factor', 'Color', 'w');
+hold on; grid on;
+plot(pos_i, f_array, 'b', 'LineWidth', 2);
+title('Friction Factor')
+xlabel('Axial Position x (m)');
+ylabel('Dimensionless');
+xline(0, 'k--', 'Throat', 'LabelVerticalAlignment', 'bottom', 'HandleVisibility', 'off');
+
+% Nu
+figure('Name', 'Nusselt Number', 'Color', 'w');
+hold on; grid on;
+plot(pos_i, Nu_array, 'b', 'LineWidth', 2);
+title('Nusselt Number')
+xlabel('Axial Position x (m)');
+ylabel('Dimensionless');
+xline(0, 'k--', 'Throat', 'LabelVerticalAlignment', 'bottom', 'HandleVisibility', 'off');
+
+% Saturation Temp
+figure('Name', 'Saturation Temp', 'Color', 'w');
+hold on; grid on;
+plot(pos_i, T_sat_array, 'b', 'LineWidth', 2);
+title('Saturation Temp')
+xlabel('Axial Position x (m)');
+ylabel('K');
+xline(0, 'k--', 'Throat', 'LabelVerticalAlignment', 'bottom', 'HandleVisibility', 'off');
