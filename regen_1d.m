@@ -154,7 +154,7 @@ D_channel_base = D_gas + 2 * wall_thickness; % Engine diameters with added wall 
 D_t_base = D_t + 2 * wall_thickness; % Throat diameter with added wall thickness
 % Number of channels determined at throat
 circ_t_base = pi * (D_t_base); % Gas side diameter + wall thickness
-num_channel = floor(circ_t_base / (w_rib + min_tol));
+num_channel = 50;
 % Local circumferences across engine
 circ_local_base = pi * D_channel_base;
 w_channel = (circ_local_base - (num_channel * w_rib)) ./ num_channel; % variable, channel widths
@@ -367,6 +367,9 @@ CHF_array = zeros(size(pos_i));
 f_array = zeros(size(pos_i));
 Nu_array = zeros(size(pos_i));
 T_sat_array = zeros(size(pos_i));
+h_c_f_array = zeros(size(pos_i));
+Re_array = zeros(size(pos_i));
+vel_c_array = zeros(size(pos_i));
 
 %% Main Loop
 P_guess = convpres(500, 'psi', 'Pa');
@@ -414,6 +417,8 @@ while abs(P_error) > tol_P % Pressure guess loop
        
         vel_c = mdot_f / (A_c_cs_tot * rho_c); % coolant cs area instead
         Re = (rho_c * D_h_loc * vel_c) / mu_c;
+        Re_array(d) = Re;
+        vel_c_array(d) = vel_c;
 
         if (Re>4000) % Turbulent
             f_guess = 64/Re; % Initial guess
@@ -460,6 +465,8 @@ while abs(P_error) > tol_P % Pressure guess loop
             k_w_loc = interp1(k_w_ref_temps, k_w_ref, T_hw_guess, 'linear', 'extrap');
             fin_m = sqrt((2*h_c*(dx + w_rib))/(k_w_loc * dx * w_rib));
             fin_eff = tanh(fin_m * h_channel) / (fin_m * h_channel);
+            h_c_f = h_c*(w_channel+2*fin_eff*h_channel)/(w_channel+w_rib);
+            h_c_f_array(d) = h_c_f;
             % Gas convection HTC with Bartz
             sigma = 1 / ...
                 ((0.5 * (T_hw_guess/T_stag) * (1 + (gamma-1)/2 * M_local(d)^2) + 0.5)^0.68 *...
@@ -478,7 +485,7 @@ while abs(P_error) > tol_P % Pressure guess loop
 
             % For wall-coolant HT: t_i = wall_thickness, Nch = num_channel, Di = D_g_loc, Li = dx
             if (T_cw <= T_sat)
-                R_th = (1/(h_c*dx*(2*fin_eff*ch+cw)))+...
+                R_th = (1/(h_c_f*dx*(2*fin_eff*ch+cw)))+...
                     ((num_channel*log(1+2*wall_thickness/D_g_loc))/(2*pi*dx*k_w_loc));
                 q_3 = num_channel * (T_hw_guess-T_bulk) / R_th;
             else % Nucleate
@@ -487,9 +494,9 @@ while abs(P_error) > tol_P % Pressure guess loop
                     (((k_c^0.79)*(cp_c^0.45)*(rho_c_l^0.49))/...
                     ((surften^0.5)*(mu_c^0.29)*(h_fg^0.24)*(rho_c_v^0.24)))*...
                     ((T_cw-T_sat)^0.24)*...
-                    (max(0,P_sat_T_cw - P_loc))^0.75;
+                    (P_sat_T_cw - P_loc)^0.75;
                 S = 1/(1+(2.53*(10^-6))*(Re^1.17));
-                q_3 = A_co(d)*(h_c*(T_cw-T_bulk)+S*h_nb*(T_cw-T_sat));
+                q_3 = A_co(d)*(h_c_f*(T_cw-T_bulk)+S*h_nb*(T_cw-T_sat));
             end
             
             current_q_error = q_1 - q_3;
@@ -642,6 +649,7 @@ hold off;
 figure('Name', 'CoolantHTC', 'Color', 'w');
 hold on; grid on;
 plot(pos_i, h_c_array, 'b', 'LineWidth', 2);
+plot(pos_i, h_c_f_array, 'g', 'LineWidth', 2);
 title('Coolant Heat Transfer Coefficient')
 xlabel('Axial Position x (m)');
 ylabel('Heat Transfer Coefficient (W/m^2*K)');
@@ -674,4 +682,22 @@ plot(pos_i, T_sat_array, 'b', 'LineWidth', 2);
 title('Saturation Temp')
 xlabel('Axial Position x (m)');
 ylabel('K');
+xline(0, 'k--', 'Throat', 'LabelVerticalAlignment', 'bottom', 'HandleVisibility', 'off');
+
+% Re
+figure('Name', 'Re', 'Color', 'w');
+hold on; grid on;
+plot(pos_i, Re_array, 'b', 'LineWidth', 2);
+title('Re')
+xlabel('Axial Position x (m)');
+ylabel('Dimensionless');
+xline(0, 'k--', 'Throat', 'LabelVerticalAlignment', 'bottom', 'HandleVisibility', 'off');
+
+% Coolant Velocity
+figure('Name', 'Coolant Velocity', 'Color', 'w');
+hold on; grid on;
+plot(pos_i, vel_c_array, 'b', 'LineWidth', 2);
+title('Coolant Velocity')
+xlabel('Axial Position x (m)');
+ylabel('m/s');
 xline(0, 'k--', 'Throat', 'LabelVerticalAlignment', 'bottom', 'HandleVisibility', 'off');
