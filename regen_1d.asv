@@ -212,6 +212,29 @@ prandtl_g_local = interp1(M_ref, prandtl_ref, M_local, 'linear', 'extrap');
 
 Taw = T_stag * ((1 + prandtl_g_local.^(1/3).*((gamma - 1) / 2) .* M_local.^2) ...
     ./ (1 + ((gamma - 1) / 2) .* M_local.^2));
+% Old code, doesn't work because interp1 need x values to be monotonically increasing, switch to using M_local
+%{ 
+AR_ref = [Rc^2/Rt^2, 1, eps];
+A_local = D_gas.^2 .* (pi/4);
+AR_local = A_local ./ At;
+cp_g_local = interp1(AR_ref, cp_g_ref, AR_local, 'linear', 'extrap');
+mu_g_local = interp1(AR_ref, mu_g_ref, AR_local, 'linear', 'extrap');
+k_g_local = interp1(AR_ref, k_g_ref, AR_local, 'linear', 'extrap');
+prandtl_g_local = interp1(AR_ref, prandtl_ref, AR_local, 'linear', 'extrap');
+% Local Mach from isentropic area-mach relation
+M_local = zeros(size(pos_i));
+for k = 1:length(pos_i)
+    if pos_i(k) < 0 % Chamber and Converging
+        M_local(k) = flowisentropic(gamma, AR_local(k), 'sub');
+    elseif pos_i(k) == 0
+        M_local(k) = 1.0;
+    else
+        M_local(k) = flowisentropic(gamma, AR_local(k), 'sup');
+    end
+end
+Taw = T_stag * ((1 + prandtl_g_local.^(1/3).*((gamma - 1) / 2) .* M_local.^2) ...
+    ./ (1 + ((gamma - 1) / 2) .* M_local.^2));
+%}
 
 %% Coolant Properties
 
@@ -385,6 +408,9 @@ while abs(P_error) > tol_P % Pressure guess loop
         rho_c_v = get_rho_v(P_loc);
         surften = get_surften(P_loc);
         h_fg = get_h_fg(P_loc);
+
+        %mu_g_local_us = mu_g_local(d) * 0.0559974; % Pa*s - (lb/in)*s
+        %cp_g_local_us = cp_g_local(d) * 0.00023885; % J/(kg*K) - Btu/(lb*deg F)
        
         vel_c = mdot_f / (A_c_cs_tot * rho_c); % coolant cs area instead
         Re = (rho_c * D_h_loc * vel_c) / mu_c;
@@ -505,6 +531,11 @@ while abs(P_error) > tol_P % Pressure guess loop
         F_p = 1.17-8.56*(10^(-4))*convpres(P_loc, 'Pa', 'psi');
         CHF_array(d) = CHF_base*F_p*1635000;
         T_sat_array(d) = T_sat;
+        %{
+        if (q_flux >= CHF) %prob change this to smth else
+            error('CHF exceeded at station ' + d);
+        end
+        %}
 
         % Prepare for next station
         T_bulk_array(d) = T_bulk; % Store the updated bulk temperature
