@@ -52,14 +52,12 @@ T_stag = double(temps_cea{1}) * 5/9 * cstar_eff^2; % K
 cstar_theo = double(c.get_Cstar(pyargs('Pc', Pc_us, 'MR', o_f))) * 0.3048; % m/s
 cf_cea = c.get_PambCf(pyargs('Pamb', Pamb, 'Pc', Pc_us, 'MR', o_f, 'eps', exp_ratio));
 cf_theo = double(cf_cea{1});
-MW = 23.446; % g/mol
 
 % Calculating target injector manifold pressure
 fuel_stiffness = 0.20; % standard
 dP_inj = fuel_stiffness * Pc; % Pa
 mdot_total = F / (cstar_theo * cstar_eff * cf_theo * cf_eff); % kg/s
 cstar_act = cstar_theo .* cstar_eff; % m/s
-cstar_act_us = cstar_act * 39.3701; %in/s
 mdot_f = mdot_total ./ (1 + o_f); % kg/s
 rho_f_inj = 789 * mfrac_eth + 1000 * mfrac_h2o; % kg/m^3 (20C)
 CdA_f_inj = mdot_f / sqrt(2 * rho_f_inj * dP_inj); % m^2 (Heritage)
@@ -69,16 +67,12 @@ P_target = Pc + dP_inj; % Pa manifold pressure (target value)
 At = (cstar_act * mdot_total)/Pc; % m^2
 Rt = sqrt(At/pi); % m
 R_curve = 1.5 * Rt;
-R_curve_us = R_curve * 39.3701; % m - in
 
 %% Diverging Geometry
-%Me = sqrt((2/(gamma-1))*((Pc_us/Pamb)^((gamma - 1)/gamma) - 1));
-%Ae = At * (1/Me)*((2/(gamma + 1))*(1 + ((gamma - 1)/2) * Me^2))^((gamma + 1)/(2*(gamma - 1)));
 Ae = At * exp_ratio; % m^2
 R_exit = sqrt(Ae/pi); % m, nozzle exit radius
 percent_len = 0.8; % input (0.8 is optimal fractional length for most cases)
 len_div = percent_len * ((R_exit - Rt)/tan(deg2rad(15))); % m diverging length from radii
-theta_e = deg2rad(13); % deg, from HH fig 4.16
 theta_n = deg2rad(23); % deg
 
 %% Chamber and Converging Geometry
@@ -108,7 +102,6 @@ len_total = len_chamber + len_conv + len_div; % m
 dx = 0.001; % 1 mm step size
 
 % Recentering coordinates to around throat
-x_t = 0;
 x_chamber_start = -(len_chamber + len_conv);
 x_exit = len_div;
 % Position arrrays
@@ -150,14 +143,10 @@ dl = dx .* sqrt(1 + dpos_dx.^2);
 min_tol = 0.001; % m 3d printer tolerance
 D_gas = 2 * pos_j; % Array of gas-side diameter at every node
 D_t = 2 * Rt;
-D_t_us = D_t * 39.3701; % m - in
 h_channel = min_tol; % channel height (radial)
 wall_thickness = min_tol; % HW/CW
 w_rib = min_tol; % fixed, rib width
 D_channel_base = D_gas + 2 * wall_thickness; % Engine diameters with added wall thickness
-D_t_base = D_t + 2 * wall_thickness; % Throat diameter with added wall thickness
-% Number of channels determined at throat
-circ_t_base = pi * (D_t_base); % Gas side diameter + wall thickness
 num_channel = 50;
 % Local circumferences across engine
 circ_local_base = pi * D_channel_base;
@@ -165,14 +154,9 @@ w_channel = (circ_local_base - (num_channel * w_rib)) ./ num_channel; % variable
 assert(all(w_channel > 0), ...
     'Channel width non-positive (min = %.3g mm): num_channel/w_rib too large for throat circumference.', ...
     min(w_channel)*1000);
-D_h = (4 .* w_channel .* h_channel) ./ (2 * w_channel + 2 * h_channel); % hydraulic diameter of rectangular channels
-Per_heated = w_channel + 2 * h_channel; % heated perimeter
 
 %% HT Areas
 A_gas = pi .* D_gas .* dl; % Gas-wall convection SA
-A_w = pi .* ((D_gas + D_channel_base)./2) .* dl; % wall-wall conduction SA (average diameter)
-A_co = Per_heated .* num_channel .* dl; % coolant side surface area (heated)
-A_wc = w_channel .* dl; % cool wall area per increment
 
 %% Visualization Plot
 
@@ -222,30 +206,6 @@ prandtl_g_local = interp1(M_ref, prandtl_ref, M_local, 'linear', 'extrap');
 
 Taw = T_stag * ((1 + prandtl_g_local.^(1/3).*((gamma - 1) / 2) .* M_local.^2) ...
     ./ (1 + ((gamma - 1) / 2) .* M_local.^2));
-% Old code, doesn't work because interp1 need x values to be monotonically increasing, switch to using M_local
-%{ 
-AR_ref = [Rc^2/Rt^2, 1, eps];
-A_local = D_gas.^2 .* (pi/4);
-AR_local = A_local ./ At;
-cp_g_local = interp1(AR_ref, cp_g_ref, AR_local, 'linear', 'extrap');
-mu_g_local = interp1(AR_ref, mu_g_ref, AR_local, 'linear', 'extrap');
-k_g_local = interp1(AR_ref, k_g_ref, AR_local, 'linear', 'extrap');
-prandtl_g_local = interp1(AR_ref, prandtl_ref, AR_local, 'linear', 'extrap');
-% Local Mach from isentropic area-mach relation
-M_local = zeros(size(pos_i));
-for k = 1:length(pos_i)
-    if pos_i(k) < 0 % Chamber and Converging
-        M_local(k) = flowisentropic(gamma, AR_local(k), 'sub');
-    elseif pos_i(k) == 0
-        M_local(k) = 1.0;
-    else
-        M_local(k) = flowisentropic(gamma, AR_local(k), 'sup');
-    end
-end
-Taw = T_stag * ((1 + prandtl_g_local.^(1/3).*((gamma - 1) / 2) .* M_local.^2) ...
-    ./ (1 + ((gamma - 1) / 2) .* M_local.^2));
-%}
-
 %% Coolant Properties
 
 % Required properties update for equilibrium: Cp, k, mu, rho
@@ -390,21 +350,18 @@ end
 P_table_max = max(P_vec); % Pa, upper clamp for pressure guesses
 
 %% Material Properties (316 Stainless)
-T_mp = 1643.15; % K
 % Wall thermal conductivity k_w = f(T)
 k_w_ref_temps = [-0.15, 19.85, 26.85, 76.85, 126.85, 226.85, 326.85, 426.85, 526.85, 626.85, ...
     726.85, 826.85, 926.85, 1026.9, 1126.9, 1226.9, 1326.9, 1370.9, 1398.9, 1426.9] + 273.15; % K
 k_w_ref = [12.97, 13.31, 13.44, 14.32, 15.16, 16.8, 18.36, 19.87, 21.39, 22.79, 24.06, 25.46, 26.74, ...
     28.02, 29.32, 30.61, 31.86, 32.41, 26.9, 27.24];
 r = 1e-4; % m, surface roughness
-%get_k_w = interp1(k_w_ref_temps, k_w_ref, T_w_local, 'linear'); % callout
 
 %% Output Arrays
 T_hw_array = zeros(size(pos_i));
 T_cw_array = zeros(size(pos_i));
 T_bulk_array = zeros(size(pos_i));
 P_array = zeros(size(pos_i));
-P_loss_array = zeros(size(pos_i));
 q_flux_array = zeros(size(pos_i));
 h_g_array = zeros(size(pos_i));
 h_c_array = zeros(size(pos_i));
@@ -434,7 +391,6 @@ while ~P_converged % Pressure guess loop
     for d = length(pos_i):-1:1 % Axial marching loop
         % Local Geometry, add channel height array earlier
         A_g_loc = A_gas(d);
-        A_w_loc = A_w(d);
         D_g_loc = D_gas(d);
         dl_loc = dl(d);
         cw = w_channel(d);
@@ -442,13 +398,8 @@ while ~P_converged % Pressure guess loop
         D_h_loc = (2*cw*ch)/(cw+ch);
         A_c_cs = cw*ch; % Cross sectional area of channel
         A_c_cs_tot = A_c_cs * num_channel;
-        if (d ~= 1) % If not at final chamber station
-            A_c_cs_next = w_channel(d-1)*h_channel;
-            D_h_loc_next = (2*w_channel(d-1)*h_channel/(w_channel(d-1)+h_channel));
-        else % At final station
-            A_c_cs_next = A_c_cs;
-            D_h_loc_next = D_h_loc;
-        end
+        A_c_cs_next = w_channel(max(d-1,1))*h_channel; % equals A_c_cs at the last station
+        A_tot_next = A_c_cs_next * num_channel;
 
         % Coolant properties
         rho_c = get_rho(P_loc, T_bulk);
@@ -466,9 +417,6 @@ while ~P_converged % Pressure guess loop
                 d, P_loc, T_bulk);
         end
 
-        mu_g_local_us = mu_g_local(d) * 0.0559974; % Pa*s - (lb/in)*s
-        cp_g_local_us = cp_g_local(d) * 0.00023885; % J/(kg*K) - Btu/(lb*deg F)
-       
         vel_c = mdot_f / (A_c_cs_tot * rho_c); % coolant cs area instead
         Re = (rho_c * D_h_loc * vel_c) / mu_c;
         Re_array(d) = Re;
@@ -491,15 +439,12 @@ while ~P_converged % Pressure guess loop
 
         Pr = (cp_c*mu_c)/k_c;
         Nu_lam = 4.36; % laminar Nu, uniform heat flux
-        if (Re > 4000)
-            Nu = ((f_smooth/8)*(Re-1000)*Pr)/...
-                (1+12.7*(f_smooth/8)^0.5*(Pr^(2/3)-1));
-        elseif (Re < 2300) % laminar (Gnielinski would go negative for Re < 1000)
+        if (Re < 2300) % laminar (Gnielinski would go negative for Re < 1000)
             Nu = Nu_lam;
         else
             Nu_turb = ((f_smooth/8)*(Re-1000)*Pr)/...
-                (1+12.7*(f_smooth/8)^0.5*(Pr^(2/3)-1));
-            Nu = Nu_lam + (Nu_turb - Nu_lam)*(Re - 2300)/(4000 - 2300);
+                (1+12.7*(f_smooth/8)^0.5*(Pr^(2/3)-1)); % Gnielinski
+            Nu = Nu_lam + (Nu_turb - Nu_lam)*min((Re - 2300)/(4000 - 2300), 1);
         end
         h_c = Nu * k_c / D_h_loc; % Coolant convection htc hydraulic diameter
         h_c_array(d) = h_c;
@@ -603,11 +548,6 @@ while ~P_converged % Pressure guess loop
             CHF_array(d) = NaN; % correlation invalid at zero subcooling
         end
         T_sat_array(d) = T_sat;
-        %{
-        if (q_flux >= CHF_array(d)) %prob change this to smth else
-            error('CHF exceeded at station %d', d);
-        end
-        %}
 
         % Prepare for next station
         T_bulk_array(d) = T_bulk; % Store the updated bulk temperature
@@ -616,30 +556,24 @@ while ~P_converged % Pressure guess loop
         % Calculate pressure losses 
         P_loss_viscous = (f_calc*rho_c*vel_c^2*dl_loc)/(2*D_h_loc);
 
-        if (d ~= length(pos_i))
-            if (A_c_cs < A_c_cs_next)
-                K = ((A_c_cs/A_c_cs_next)^2-1)^2;
-            elseif (A_c_cs > A_c_cs_next)
-                K = 0.5-0.167*(A_c_cs_next/A_c_cs)-...
-                    0.125*(A_c_cs_next/A_c_cs)^2-...
-                    0.208*(A_c_cs_next/A_c_cs)^3;
-            else
-                K = 0;
-            end
-            P_loss_area = 0.5*K*rho_c*vel_c^2;
+        if (A_c_cs < A_c_cs_next)
+            K = ((A_c_cs/A_c_cs_next)^2-1)^2;
+        elseif (A_c_cs > A_c_cs_next)
+            K = 0.5-0.167*(A_c_cs_next/A_c_cs)-...
+                0.125*(A_c_cs_next/A_c_cs)^2-...
+                0.208*(A_c_cs_next/A_c_cs)^3;
         else
-            P_loss_area = 0;
+            K = 0;
         end
+        P_loss_area = 0.5*K*rho_c*vel_c^2;
 
         % dP = G_avg*(V_next - V_here); relies on T_bulk already being advanced
         rho_c_next = get_rho(P_loc, T_bulk);
-        P_loss_mom = mdot_f^2*...
-            (2/(A_c_cs*num_channel+A_c_cs_next*num_channel))*...
-            (1/(rho_c_next*A_c_cs_next*num_channel) - 1/(rho_c*A_c_cs*num_channel));
+        P_loss_mom = mdot_f^2*(2/(A_c_cs_tot + A_tot_next))*...
+            (1/(rho_c_next*A_tot_next) - 1/(rho_c*A_c_cs_tot));
 
         P_loss_tot = P_loss_mom + P_loss_area + P_loss_viscous;
-        P_loss_array(d) = P_loss_tot;
-        P_loc = P_loc - P_loss_tot; 
+        P_loc = P_loc - P_loss_tot;
         P_array(d) = convpres(P_loc, 'Pa', 'psi');
     end
 
@@ -673,6 +607,11 @@ end
 n_boil = nnz(T_bulk_array >= T_sat_array);
 if n_boil > 0
     warning('T_bulk reached T_sat at %d stations: bulk boiling is not modeled', n_boil);
+end
+n_chf = nnz(q_flux_array >= CHF_array);
+if n_chf > 0
+    warning('q_flux exceeds CHF at %d stations (max ratio %.2f)', ...
+        n_chf, max(q_flux_array./CHF_array));
 end
 T_sat_ceiling = get_T_sat(P_table_max);
 n_Tb_clamped = nnz(T_bulk_array > max(T_vec));
