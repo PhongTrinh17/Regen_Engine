@@ -436,6 +436,7 @@ while abs(P_error) > tol_P % Pressure guess loop
             iter_T = iter_T + 1;
             % Fin Efficiency
             k_w_loc = interp1(k_w_ref_temps, k_w_ref, T_hw_guess, 'linear', 'extrap');
+            %fin_m = sqrt((2*h_c*(dx + w_rib))/(k_w_loc * dx * w_rib));
             fin_m = sqrt((2*h_c)/(k_w_loc * w_rib));
             fin_eff = tanh(fin_m * ch) / (fin_m * ch);
             h_c_f = h_c*(cw+2*fin_eff*ch)/(cw+w_rib); % Fin corrected h_c
@@ -461,12 +462,12 @@ while abs(P_error) > tol_P % Pressure guess loop
             if (T_cw <= T_sat)
                 R_th = (1/(h_c_f*dx*(2*fin_eff*ch+cw)))+...
                     ((num_channel*log(1+2*wall_thickness/D_g_loc))/(2*pi*dx*k_w_loc));
-                q_3 = ((T_hw_guess-T_bulk) / R_th);
+                q_3 = num_channel * ((T_hw_guess-T_bulk) / R_th);
             else % Nucleate
                 P_sat_T_cw = get_P_sat(T_cw);
                 h_nb = 0.00122*...
-                    (((k_c^0.79)*(cp_c^0.45)*(rho_c_l^0.49)*9.81^0.25)/...
-                    ((surften^0.5)*(mu_c^0.25)*(h_fg^0.24)*(rho_c_v^0.24)))*...
+                    (((k_c^0.79)*(cp_c^0.45)*(rho_c_l^0.49))/...
+                    ((surften^0.5)*(mu_c^0.29)*(h_fg^0.24)*(rho_c_v^0.24)))*...
                     ((T_cw-T_sat)^0.24)*...
                     (P_sat_T_cw - P_loc)^0.75;
                 S = 1/(1+(2.53*(10^-6))*(Re^1.17));
