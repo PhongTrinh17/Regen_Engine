@@ -46,7 +46,8 @@ gamma_throat = c.get_Throat_MolWt_gamma(pyargs('Pc', Pc_us, 'MR', o_f, 'eps', ex
 gamma = double(gamma_throat{2}); % specific heat ratio, constant for isentropic relations
 
 temps_cea = c.get_Temperatures(pyargs('Pc', Pc_us, 'MR', o_f, 'eps', exp_ratio)); % R
-T_stag = double(temps_cea{1}) * 5/9; % K, Chamber (adiabatic Wall -> constant stagnation temp)
+% derated by cstar_eff^2 (c* ~ sqrt(Tc)); adiabatic wall -> constant stagnation temp
+T_stag = double(temps_cea{1}) * 5/9 * cstar_eff^2; % K
 
 cstar_theo = double(c.get_Cstar(pyargs('Pc', Pc_us, 'MR', o_f))) * 0.3048; % m/s
 cf_cea = c.get_PambCf(pyargs('Pamb', Pamb, 'Pc', Pc_us, 'MR', o_f, 'eps', exp_ratio));
@@ -248,9 +249,8 @@ Taw = T_stag * ((1 + prandtl_g_local.^(1/3).*((gamma - 1) / 2) .* M_local.^2) ..
 %% Coolant Properties
 
 % Required properties update for equilibrium: Cp, k, mu, rho
-% Define Table bounds (Tmax < T_sat at Pmin or coolprop will crash)
 table_filename = 'coolprop_tables.mat';
-table_version_req = 3; % bump to force cached tables to rebuild
+table_version_req = 4; % bump to force cached tables to rebuild
 tables_loaded = false;
 if isfile(table_filename)
     tbl = load(table_filename);
@@ -267,7 +267,7 @@ if ~tables_loaded % create tables first time (or rebuild when table_version_req 
     P_min = convpres(300, 'psi', 'Pa'); % Pa, at chamber
     P_max = convpres(900, 'psi', 'Pa'); % Pa, at fuel tank
     T_min = 290; % K, standard inlet temp
-    T_max = 450; % K, below 300 psi boiling point of ethanol
+    T_max = 500; % K, above mixture T_sat; bulk lookups below clamp to the liquid side
     % 1D vectors for P and T (fast solve for Coolprop, easy to get)
     P_vec = linspace(P_min, P_max, res);
     T_vec = linspace(T_min, T_max, res);
@@ -293,9 +293,9 @@ if ~tables_loaded % create tables first time (or rebuild when table_version_req 
     % Generate values
     for i = 1:res
         P_val = P_vec(i);
+        T_sat_h2o = py.CoolProp.CoolProp.PropsSI('T','P',P_val,'Q',0, 'water');
         if P_val < 6140000 % Ethanol critical pressure in Pa
             T_sat_eth = py.CoolProp.CoolProp.PropsSI('T','P',P_val,'Q',0, 'ethanol');
-            T_sat_h2o = py.CoolProp.CoolProp.PropsSI('T','P',P_val,'Q',0, 'water');
             % bubble point by bisection on modified Raoult; a mass-weighted
             % average of the pure Tsats is not a bubble point
             T_lo = T_sat_eth - 15;
@@ -341,15 +341,23 @@ if ~tables_loaded % create tables first time (or rebuild when table_version_req 
         for j = 1:res
             P_val = P_grid(i,j);
             T_val = T_grid(i,j);
-            
-            rho_eth = py.CoolProp.CoolProp.PropsSI('D','T',T_val,'P',P_val,'ethanol');
-            rho_h2o = py.CoolProp.CoolProp.PropsSI('D','T',T_val,'P',P_val,'water');
-            cp_eth = py.CoolProp.CoolProp.PropsSI('C','T',T_val,'P',P_val,'ethanol');
-            cp_h2o = py.CoolProp.CoolProp.PropsSI('C','T',T_val,'P',P_val,'water');
-            mu_eth = py.CoolProp.CoolProp.PropsSI('V','T',T_val,'P',P_val,'ethanol');
-            mu_h2o = py.CoolProp.CoolProp.PropsSI('V','T',T_val,'P',P_val,'water');
-            k_eth = py.CoolProp.CoolProp.PropsSI('L','T',T_val,'P',P_val,'ethanol');
-            k_h2o = py.CoolProp.CoolProp.PropsSI('L','T',T_val,'P',P_val,'water');
+            % clamp lookups to the liquid side of each component's dome so the
+            % grid never mixes liquid and vapor states
+            if P_val < 6140000
+                T_eth_q = min(T_val, T_sat_eth - 1);
+            else % supercritical: single phase at any T
+                T_eth_q = T_val;
+            end
+            T_h2o_q = min(T_val, T_sat_h2o - 1);
+
+            rho_eth = py.CoolProp.CoolProp.PropsSI('D','T',T_eth_q,'P',P_val,'ethanol');
+            rho_h2o = py.CoolProp.CoolProp.PropsSI('D','T',T_h2o_q,'P',P_val,'water');
+            cp_eth = py.CoolProp.CoolProp.PropsSI('C','T',T_eth_q,'P',P_val,'ethanol');
+            cp_h2o = py.CoolProp.CoolProp.PropsSI('C','T',T_h2o_q,'P',P_val,'water');
+            mu_eth = py.CoolProp.CoolProp.PropsSI('V','T',T_eth_q,'P',P_val,'ethanol');
+            mu_h2o = py.CoolProp.CoolProp.PropsSI('V','T',T_h2o_q,'P',P_val,'water');
+            k_eth = py.CoolProp.CoolProp.PropsSI('L','T',T_eth_q,'P',P_val,'ethanol');
+            k_h2o = py.CoolProp.CoolProp.PropsSI('L','T',T_h2o_q,'P',P_val,'water');
             
             rho_grid(i,j) =  1 / ((mfrac_eth / rho_eth) + (mfrac_h2o / rho_h2o));
             cp_grid(i,j) = mfrac_eth * cp_eth + mfrac_h2o * cp_h2o;
@@ -662,6 +670,10 @@ while ~P_converged % Pressure guess loop
 end
 
 % the tables clamp outside their bounds with no warning
+n_boil = nnz(T_bulk_array >= T_sat_array);
+if n_boil > 0
+    warning('T_bulk reached T_sat at %d stations: bulk boiling is not modeled', n_boil);
+end
 T_sat_ceiling = get_T_sat(P_table_max);
 n_Tb_clamped = nnz(T_bulk_array > max(T_vec));
 if n_Tb_clamped > 0
