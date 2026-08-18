@@ -428,15 +428,11 @@ while abs(Loop.P_error) > Loop.tol_P % Pressure guess loop
         is_boiling = false;
         
         %Temp Loops
-        Temp = temp_iteration_sc(Geo, Gas, Loop, Mat, d, Param, is_boiling, 0);
+        Temp = temp_iteration(Geo, Gas, Loop, Mat, d, Param, is_boiling, 0);
         
         T_cw = Temp.T_hw_guess - (Temp.q_eq)*...
                 log(1+2*Geo.wall_thickness/Loop.D_g_loc)/(2*pi*Geo.dx*Temp.k_w_loc); % Cold wall temp derived from guess, change Geo.dx to real dl
         Loop.P_sat_T_cw = Cool.get_P_sat(T_cw);
-
-        if (T_cw > Loop.T_sat)
-            Temp = temp_iteration_nb();
-
   
         Arrays.T_hw_array(d) = Loop.Taw_loc;
         Arrays.T_cw_array(d) = T_cw;
