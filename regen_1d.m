@@ -14,6 +14,8 @@ Pamb = 9.94; % psia At 10,500 ft altitude
 T_amb = 298; % K (from feed calc sheet)
 mfrac_eth = 0.75;
 mfrac_h2o = 1 - mfrac_eth;
+mw_eth = 46.068; % g/mol
+mw_h2o = 18.015; % g/mol
 oxidizer = 'LOX';
 % Assumed efficiencies
 cstar_eff = 0.85;
@@ -32,26 +34,25 @@ card_str = sprintf(['fuel C2H5OH(L)   C 2 H 6 O 1\n', ...
 py.rocketcea.cea_obj.add_new_fuel('ETHANOL_WATER_75_25(L)', card_str);
 fuel = 'ETHANOL_WATER_75_25(L)';
 c = py.rocketcea.cea_obj.CEA_Obj(pyargs('oxName', oxidizer,'fuelName', fuel));
-eps = c.get_eps_at_PcOvPe(pyargs('Pc', Pc_us, 'MR', o_f, 'PcOvPe',(Pc_us / Pamb)));
+exp_ratio = c.get_eps_at_PcOvPe(pyargs('Pc', Pc_us, 'MR', o_f, 'PcOvPe',(Pc_us / Pamb)));
 % transport properties [Cp, mu, k, Prandtl]
-transport_chamber = c.get_Chamber_Transport(pyargs('Pc', Pc_us, 'MR', o_f, 'eps', eps));
-transport_throat = c.get_Throat_Transport(pyargs('Pc', Pc_us, 'MR', o_f, 'eps', eps));
-transport_exit = c.get_Exit_Transport(pyargs('Pc', Pc_us, 'MR', o_f, 'eps', eps));
+transport_chamber = c.get_Chamber_Transport(pyargs('Pc', Pc_us, 'MR', o_f, 'eps', exp_ratio));
+transport_throat = c.get_Throat_Transport(pyargs('Pc', Pc_us, 'MR', o_f, 'eps', exp_ratio));
+transport_exit = c.get_Exit_Transport(pyargs('Pc', Pc_us, 'MR', o_f, 'eps', exp_ratio));
 cp_g_ref = [double(transport_chamber{1}), double(transport_throat{1}), double(transport_exit{1})] .* 4184; % J/kg*K
 mu_g_ref = [double(transport_chamber{2}), double(transport_throat{2}), double(transport_exit{2})] .* 0.0001; % Pa*s viscosity
 k_g_ref = [double(transport_chamber{3}), double(transport_throat{3}), double(transport_exit{3})] .* 0.4184; % W/m*K thermal conductivity
 prandtl_ref = [double(transport_chamber{4}), double(transport_throat{4}), double(transport_exit{4})];
 
-gamma_throat = c.get_Throat_MolWt_gamma(pyargs('Pc', Pc_us, 'MR', o_f, 'eps', eps));
+gamma_throat = c.get_Throat_MolWt_gamma(pyargs('Pc', Pc_us, 'MR', o_f, 'eps', exp_ratio));
 gamma = double(gamma_throat{2}); % specific heat ratio, constant for isentropic relations
 
-temps_cea = c.get_Temperatures(pyargs('Pc', Pc_us, 'MR', o_f, 'eps', eps)); % R
+temps_cea = c.get_Temperatures(pyargs('Pc', Pc_us, 'MR', o_f, 'eps', exp_ratio)); % R
 T_stag = double(temps_cea{1}) * 5/9; % K, Chamber (adiabatic Wall -> constant stagnation temp)
 
 cstar_theo = double(c.get_Cstar(pyargs('Pc', Pc_us, 'MR', o_f))) * 0.3048; % m/s
-cf_cea = c.get_PambCf(pyargs('Pamb', Pamb, 'Pc', Pc_us, 'MR', o_f, 'eps', eps));
+cf_cea = c.get_PambCf(pyargs('Pamb', Pamb, 'Pc', Pc_us, 'MR', o_f, 'eps', exp_ratio));
 cf_theo = double(cf_cea{1});
-MW = 23.446; % g/mol
 
 % Calculating target injector manifold pressure
 fuel_stiffness = 0.20; % standard
@@ -71,10 +72,10 @@ R_curve = 1.5 * Rt;
 %% Diverging Geometry
 %Me = sqrt((2/(gamma-1))*((Pc_us/Pamb)^((gamma - 1)/gamma) - 1));
 %Ae = At * (1/Me)*((2/(gamma + 1))*(1 + ((gamma - 1)/2) * Me^2))^((gamma + 1)/(2*(gamma - 1)));
-Ae = At * eps; % m^2
-Re = sqrt(Ae/pi); % m
+Ae = At * exp_ratio; % m^2
+R_exit = sqrt(Ae/pi); % m
 percent_len = 0.8; % input (0.8 is optimal fractional length for most cases)
-len_div = percent_len * ((Re - Rt)/tan(deg2rad(15))); % m diverging length from radii
+len_div = percent_len * ((R_exit - Rt)/tan(deg2rad(15))); % m diverging length from radii
 theta_e = deg2rad(13); % deg, from HH fig 4.16
 theta_n = deg2rad(23); % deg
 
@@ -115,9 +116,9 @@ pos_j = zeros(size(pos_i)); % radii
 xn = (0.382 * Rt) * sin(theta_n); % diverging tangent point where parabola starts (theta_n)
 Rn = Rt + (0.382 * Rt) * (1 - cos(theta_n)); % y coordinate of xn
 % Rao parabola (y = ax^2 + bx + c)
-% Need to derive parabola that hits (xn, Rn), (xe, Re) w/ starting slope tan(theta_n)
+% Need to derive parabola that hits (xn, Rn), (xe, R_exit) w/ starting slope tan(theta_n)
 matrix_A = [xn^2, xn, 1; x_exit^2, x_exit, 1; 2*xn, 1, 0];
-matrix_B = [Rn; Re; tan(theta_n)];
+matrix_B = [Rn; R_exit; tan(theta_n)];
 coeffs = matrix_A \ matrix_B;
 a_Rao = coeffs(1); b_Rao = coeffs(2); c_Rao = coeffs(3);
 
@@ -139,6 +140,10 @@ for k = 1:length(pos_i)
     end
 end
 
+% Slant Length
+dx_slope = gradient(pos_j, dx);
+dl = dx .* sqrt(1 + dx_slope.^2);
+
 %% Cooling Channel and Outer Jacket Geometry
 % Fixed channel height and wall thickness
 min_tol = 0.001; % m 3d printer tolerance
@@ -159,10 +164,10 @@ D_h = (4 .* w_channel .* h_channel) ./ (2 * w_channel + 2 * h_channel); % hydrau
 Per_heated = w_channel + 2 * h_channel; % heated perimeter
 
 %% HT Areas
-A_gas = pi .* D_gas .* dx; % Gas-wall convection SA
-A_w = pi .* ((D_gas + D_channel_base)./2) .* dx; % wall-wall conduction SA (average diameter)
-A_co = Per_heated .* num_channel .* dx; % coolant side surface area (heated)
-A_wc = w_channel .* dx; % cool wall area per increment
+A_gas = pi .* D_gas .* dl; % Gas-wall convection SA
+A_w = pi .* ((D_gas + D_channel_base)./2) .* dl; % wall-wall conduction SA (average diameter)
+A_co = Per_heated .* num_channel .* dl; % coolant side surface area (heated)
+A_wc = w_channel .* dl; % cool wall area per increment
 
 %% Visualization Plot
 
@@ -218,9 +223,21 @@ Taw = T_stag * ((1 + prandtl_g_local.^(1/3).*((gamma - 1) / 2) .* M_local.^2) ..
 % Required properties update for equilibrium: Cp, k, mu, rho
 % Define Table bounds (Tmax < T_sat at Pmin or coolprop will crash)
 table_filename = 'coolprop_tables.mat';
+table_version_req = 3; % Bump to force cached tables to rebuild
+tables_loaded = false;
+
 if isfile(table_filename)
-    load(table_filename);
-else % create tables first time (delete file when changing parameters)
+    tbl = load(table_filename);
+    if isfield(tbl, 'table_version') && tbl.table_version == table_version_req
+        get_rho = tbl.get_rho; get_cp = tbl.get_cp; get_mu = tbl.get_mu; get_k = tbl.get_k;
+        get_T_sat = tbl.get_T_sat; get_rho_l = tbl.get_rho_l; get_rho_v = tbl.get_rho_v;
+        get_surften = tbl.get_surften; get_h_fg = tbl.get_h_fg; get_P_sat = tbl.get_P_sat;
+        P_vec = tbl.P_vec; T_vec = tbl.T_vec;
+        tables_loaded = true;
+    end
+end
+
+if ~tables_loaded % create tables first time (rebuild when table_version_req is bumped)
     res = 50; % 50x50 data grid
     P_min = convpres(300, 'psi', 'Pa'); % Pa, at chamber
     P_max = convpres(900, 'psi', 'Pa'); % Pa, at fuel tank
@@ -229,8 +246,17 @@ else % create tables first time (delete file when changing parameters)
     % 1D vectors for P and T (fast solve for Coolprop, easy to get)
     P_vec = linspace(P_min, P_max, res);
     T_vec = linspace(T_min, T_max, res);
+
+    x_eth = (mfrac_eth/mw_eth) / (mfrac_eth/mw_eth + mfrac_h2o/mw_h2o); % Mole fraction
+    x_h2o = 1 - x_eth;
+    A12_vl = 1.6798; A21_vl = 0.9227; % Van Laar coeffs
+    % Activity coefficients from Van Laar equation: deviation of a mixture of chemical substances from ideal behaviour
+    gam_eth = exp(A12_vl*(A21_vl*x_h2o/(A12_vl*x_eth + A21_vl*x_h2o))^2); 
+    gam_h2o = exp(A21_vl*(A12_vl*x_eth/(A12_vl*x_eth + A21_vl*x_h2o))^2);
+
     % use ndgrid for higher dimensionality use
     [P_grid, T_grid] = ndgrid(P_vec, T_vec);
+
     % 2D grids for bulk properties
     rho_grid = zeros(res,res);
     cp_grid = zeros(res,res);
@@ -246,10 +272,24 @@ else % create tables first time (delete file when changing parameters)
     % Generate values
     for i = 1:res
         P_val = P_vec(i);
+        T_sat_h2o = py.CoolProp.CoolProp.PropsSI('T','P',P_val,'Q',0, 'water');
         if P_val < 6140000 % Ethanol critical pressure in Pa
             T_sat_eth = py.CoolProp.CoolProp.PropsSI('T','P',P_val,'Q',0, 'ethanol');
-            T_sat_h2o = py.CoolProp.CoolProp.PropsSI('T','P',P_val,'Q',0, 'water');
-            T_sat_grid(i) = mfrac_eth * T_sat_eth + mfrac_h2o * T_sat_h2o;
+            %T_sat_grid(i) = mfrac_eth * T_sat_eth + mfrac_h2o * T_sat_h2o;
+            % T_sat bisec iteration based on Raoult's Law to find bubble point
+            T_sat_lo = T_sat_eth - 15; 
+            T_sat_hi = min(T_sat_h2o, 513.5); % Capped at ethanol critical temperature
+            for t = 1:40
+                T_sat_mid = 0.5*(T_sat_lo + T_sat_hi);
+                P_bubble = x_eth*gam_eth*py.CoolProp.CoolProp.PropsSI('P','T',T_sat_mid,'Q',0,'ethanol') + ...
+                    x_h2o*gam_h2o*py.CoolProp.CoolProp.PropsSI('P','T',T_sat_mid,'Q','0','water');
+                if P_bubble < P_val
+                    T_sat_lo = T_sat_mid;
+                else
+                    T_sat_hi = T_sat_mid;
+                end
+            end
+            T_sat_grid(i) = 0.5*(T_sat_lo + T_sat_hi);
             % Liquid Density
             rho_l_eth = py.CoolProp.CoolProp.PropsSI('D','P',P_val,'Q',0, 'ethanol');
             rho_l_h2o = py.CoolProp.CoolProp.PropsSI('D','P',P_val,'Q',0, 'water');
@@ -292,7 +332,10 @@ else % create tables first time (delete file when changing parameters)
             
             rho_grid(i,j) =  1 / ((mfrac_eth / rho_eth) + (mfrac_h2o / rho_h2o));
             cp_grid(i,j) = mfrac_eth * cp_eth + mfrac_h2o * cp_h2o;
-            mu_grid(i,j) = mfrac_eth * mu_eth + mfrac_h2o * mu_h2o;
+            %mu_grid(i,j) = mfrac_eth * mu_eth + mfrac_h2o * mu_h2o;
+            % Grunberg-Nissan relation for viscosity of fluid mixture
+            G12 = 840 / T_val;
+            mu_grid(i,j) = exp(x_eth*log(mu_eth) + x_h2o*log(mu_h2o) + x_eth*x_h2o*G12);
             k_grid(i,j) = mfrac_eth * k_eth + mfrac_h2o * k_h2o;
         end
     end
@@ -301,19 +344,18 @@ else % create tables first time (delete file when changing parameters)
     get_cp = griddedInterpolant(P_grid, T_grid, cp_grid, 'linear', 'nearest');
     get_mu = griddedInterpolant(P_grid, T_grid, mu_grid, 'linear', 'nearest');
     get_k = griddedInterpolant(P_grid, T_grid, k_grid, 'linear', 'nearest');
-    get_T_sat = griddedInterpolant(P_vec, T_sat_grid, 'linear', 'nearest');
-    get_rho_l = griddedInterpolant(P_vec, rho_l_grid, 'linear', 'nearest');
-    get_rho_v = griddedInterpolant(P_vec, rho_v_grid, 'linear', 'nearest');
-    get_surften = griddedInterpolant(P_vec, surften_grid, 'linear', 'nearest');
-    get_h_fg = griddedInterpolant(P_vec, h_fg_grid, 'linear', 'nearest');
-    % P_sat grid for nucleate boiling
-    psat_index = ~isnan(T_sat_grid);
-    T_sat_clean = T_sat_grid(psat_index);
-    P_clean = P_vec(psat_index);
-    get_P_sat = griddedInterpolant(T_sat_clean, P_clean, 'linear', 'nearest');
-
+    sat_idx = ~isnan(T_sat_grid);
+    get_T_sat = griddedInterpolant(P_vec(sat_idx), T_sat_grid(sat_idx), 'linear', 'nearest');
+    get_rho_l = griddedInterpolant(P_vec(sat_idx), rho_l_grid(sat_idx), 'linear', 'nearest');
+    get_rho_v = griddedInterpolant(P_vec(sat_idx), rho_v_grid(sat_idx), 'linear', 'nearest');
+    get_surften = griddedInterpolant(P_vec(sat_idx), surften_grid(sat_idx), 'linear', 'nearest');
+    get_h_fg = griddedInterpolant(P_vec(sat_idx), h_fg_grid(sat_idx), 'linear', 'nearest');
+    get_P_sat = griddedInterpolant(T_sat_grid(sat_idx), P_vec(sat_idx), 'linear', 'nearest');
+    
+    table_version = table_version_req;
     save(table_filename,'get_rho', 'get_cp', 'get_mu', 'get_k', 'get_T_sat', ...
-        'get_rho_l', 'get_rho_v', 'get_surften', 'get_h_fg', 'get_P_sat', 'P_vec', 'T_vec')
+        'get_rho_l', 'get_rho_v', 'get_surften', 'get_h_fg', 'get_P_sat', ...
+        'P_vec', 'T_vec', 'table_version')
 end
 
 %% Material Properties (316 Stainless)
@@ -389,34 +431,34 @@ while abs(P_error) > tol_P % Pressure guess loop
         h_fg = get_h_fg(P_loc);
        
         vel_c = mdot_f / (A_c_cs_tot * rho_c);
-        Re = (rho_c * D_h_loc * vel_c) / mu_c;
-        Re_array(d) = Re;
+        R_exit = (rho_c * D_h_loc * vel_c) / mu_c;
+        Re_array(d) = R_exit;
         vel_c_array(d) = vel_c;
 
-        if (Re>4000) % Turbulent
-            f_guess = 64/Re; % Initial guess
+        if (R_exit>4000) % Turbulent
+            f_guess = 64/R_exit; % Initial guess
             f_error = realmax;
             tol_f = 0.0001;
             iter_F = 0;
             while abs(f_error) > tol_f
                 iter_F = iter_F + 1;
-                f_calc = 1/(-2*log10(2.5226/(Re*sqrt(f_guess))+r/(D_h_loc*3.7065)))^2;
+                f_calc = 1/(-2*log10(2.5226/(R_exit*sqrt(f_guess))+r/(D_h_loc*3.7065)))^2;
                 f_error = f_calc - f_guess;
                 f_guess = 0.5*f_guess + 0.5*f_calc; % avoid overshooting
                 if iter_F > 100
                     break;
                 end
             end
-        elseif (Re<2300) % Laminar
-            f_calc = 64/Re;
+        elseif (R_exit<2300) % Laminar
+            f_calc = 64/R_exit;
         else % Transition
-            f_calc = 0.02783 + (7.17*10^-6)*(Re - 2300);
+            f_calc = 0.02783 + (7.17*10^-6)*(R_exit - 2300);
         end
 
         f_array(d) = f_calc;
 
         Pr = (cp_c*mu_c)/k_c;
-        Nu = ((f_calc/8)*(Re-1000)*Pr)/...
+        Nu = ((f_calc/8)*(R_exit-1000)*Pr)/...
             (1+12.7*(f_calc/8)^0.5*(Pr^(2/3)-1)); % Gnielinski 
         h_c = Nu * k_c / D_h_loc; % Coolant convection htc hydraulic diameter
         h_c_array(d) = h_c;
@@ -470,7 +512,7 @@ while abs(P_error) > tol_P % Pressure guess loop
                     ((surften^0.5)*(mu_c^0.29)*(h_fg^0.24)*(rho_c_v^0.24)))*...
                     ((T_cw-T_sat)^0.24)*...
                     (P_sat_T_cw - P_loc)^0.75;
-                S = 1/(1+(2.53*(10^-6))*(Re^1.17));
+                S = 1/(1+(2.53*(10^-6))*(R_exit^1.17));
                 q_3 = A_co(d)*(h_c_f*(T_cw-T_bulk)+S*h_nb*(T_cw-T_sat));
             end
             
@@ -492,7 +534,7 @@ while abs(P_error) > tol_P % Pressure guess loop
 
             % Break
             if iter_T > 100
-                break;
+                break
             end
         end
 
