@@ -470,18 +470,16 @@ while abs(Loop.P_error) > Loop.tol_P % Pressure guess loop
         Temp = temp_iteration_sc(Param, Geo, Gas, Mat, Loop, d);
         
         Loop.T_cw = Temp.T_hw_guess - (Temp.q_eq)*...
-                log(1+2*Geo.wall_thickness/Loop.D_g_loc)/(2*pi*Geo.dl(d)*Temp.k_w_loc); % Cold wall temp derived from guess
-        Arrays.T_cw_array(d) = Loop.T_cw;
+                log(1+2*Geo.wall_thickness/Loop.D_g_loc)/(2*pi*Geo.dx*Temp.k_w_loc); % Cold wall temp derived from guess, change Geo.dx to real dl
         Loop.P_sat_T_cw = Cool.get_P_sat(Loop.T_cw);
-        
+
         if (Loop.T_cw > Loop.T_sat)
             Temp = temp_iteration_nb(Param, Geo, Gas, Cool, Mat, Loop, d, Temp);
-            Arrays.T_cw_array(d) = Temp.T_cw;
         end
 
   
         Arrays.T_hw_array(d) = Loop.Taw_loc;
-        
+        Arrays.T_cw_array(d) = Temp.T_cw;
         Arrays.h_g_array(d) = Temp.h_g;
         
         % Check CHF
@@ -746,7 +744,7 @@ function Temp = temp_iteration_nb(Param, Geo, Gas, Cool, Mat, Loop, d, Temp) % H
 
     Temp.T_hw_calc = Loop.Taw_loc - q_nb/(Temp.h_g*Loop.A_g_loc);
     Temp.T_cw = min(Loop.T_sat, Temp.T_hw_calc - (Temp.q_eq)*...
-        log(1+2*Geo.wall_thickness/Loop.D_g_loc)/(2*pi*Geo.dl(d)*Temp.k_w_loc));
+        log(1+2*Geo.wall_thickness/Loop.D_g_loc)/(2*pi*Geo.dx*Temp.k_w_loc));
 
     % Secant
     current_T_hw_error = Temp.T_hw_calc - Temp.T_hw_guess;
@@ -790,8 +788,8 @@ function Temp = temp_iteration_nb(Param, Geo, Gas, Cool, Mat, Loop, d, Temp) % H
         
         Temp.T_hw_calc = Loop.Taw_loc - Temp.q_eq/(Temp.h_g*Loop.A_g_loc);
         Temp.T_cw = Temp.T_hw_calc - (Temp.q_eq)*...
-            log(1+2*Geo.wall_thickness/Loop.D_g_loc)/(2*pi*Geo.dl(d)*Temp.k_w_loc);
-        Loop.P_sat_T_cw = Cool.get_P_sat(min(Temp.T_cw, 513)); % Cap at critical pressure for ethanol
+            log(1+2*Geo.wall_thickness/Loop.D_g_loc)/(2*pi*Geo.dx*Temp.k_w_loc);
+        Loop.P_sat_T_cw = Cool.get_P_sat(Temp.T_cw);
 
         h_nb = 0.00122*...
             (((Loop.k_c^0.79)*(Loop.cp_c^0.45)*(Loop.rho_c_l^0.49))/...
