@@ -480,12 +480,12 @@ while abs(Loop.P_error) > Loop.tol_P % Pressure guess loop
         end
 
   
-        Arrays.T_hw_array(d) = Loop.Taw_loc;
+        Arrays.T_hw_array(d) = Temp.T_hw_guess;
         
         Arrays.h_g_array(d) = Temp.h_g;
         
         % Check CHF
-        q_flux = Temp.q_eq/(pi*(Loop.D_g_loc+Geo.wall_thickness*2)*Geo.dx);
+        q_flux = Temp.q_eq/(pi*(Loop.D_g_loc+Geo.wall_thickness*2)*Geo.dl(d));
         Arrays.q_flux_array(d) = q_flux;
         CHF_base = 0.1003+0.05264*sqrt(convvel(Loop.vel_c, 'm/s', 'ft/s')*...
             (convtemp(Loop.T_sat, 'K', 'F')-convtemp(Loop.T_bulk, 'K', 'F')));
