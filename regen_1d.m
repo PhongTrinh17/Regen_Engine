@@ -48,7 +48,7 @@ gamma_throat = c.get_Throat_MolWt_gamma(pyargs('Pc', Pc_us, 'MR', o_f, 'eps', ex
 Gas.gamma = double(gamma_throat{2}); % specific heat ratio, constant for isentropic relations
 
 temps_cea = c.get_Temperatures(pyargs('Pc', Pc_us, 'MR', o_f, 'eps', exp_ratio)); % Mat.r
-Gas.T_stag = double(temps_cea{1}) * 5/9; % K, Chamber (adiabatic Wall -> constant stagnation temp)
+Gas.T_stag = double(temps_cea{1}) * 5/9 * cstar_eff^2; % K, Chamber (adiabatic Wall -> constant stagnation temp)
 
 cstar_theo = double(c.get_Cstar(pyargs('Pc', Pc_us, 'MR', o_f))) * 0.3048; % m/s
 cf_cea = c.get_PambCf(pyargs('Pamb', Pamb, 'Pc', Pc_us, 'MR', o_f, 'eps', exp_ratio));
@@ -383,7 +383,7 @@ Arrays.h_c_f_array = zeros(size(Geo.pos_i));
 Arrays.Re_array = zeros(size(Geo.pos_i));
 Arrays.vel_c_array = zeros(size(Geo.pos_i));
 Arrays.fin_eff_array = zeros(size(Geo.pos_i));
-Arrays.q_error_array = zeros(size(Geo.pos_i));
+
 
 %% Main Loop
 Loop.P_guess = convpres(500, 'psi', 'Pa');
@@ -399,12 +399,12 @@ while abs(Loop.P_error) > Loop.tol_P % Pressure guess loop
 
     for d = length(Geo.pos_i):-1:1 % Axial marching loop
         % Local Geometry, add channel height array earlier
+        Loop.cw = Geo.w_channel(d);
+        Loop.ch = Geo.h_channel;
         Loop.A_g_loc = Geo.A_gas(d);
         Loop.A_w_loc = Geo.A_w(d);
         Loop.A_base_loc = pi * Geo.D_channel_base(d) * Geo.dl(d);
         Loop.D_g_loc = Geo.D_gas(d);
-        Loop.cw = Geo.w_channel(d);
-        Loop.ch = Geo.h_channel;
         Loop.D_h_loc = (2*Loop.cw*Loop.ch)/(Loop.cw+Loop.ch);
         Loop.A_c_cs = Loop.cw*Loop.ch; % Cross sectional area of channel
         Loop.A_c_cs_tot = Loop.A_c_cs * Geo.num_channel;
@@ -481,16 +481,21 @@ while abs(Loop.P_error) > Loop.tol_P % Pressure guess loop
 
   
         Arrays.T_hw_array(d) = Temp.T_hw_guess;
-        
+        Arrays.fin_eff_array(d) = Temp.fin_eff;
         Arrays.h_g_array(d) = Temp.h_g;
         
         % Check CHF
-        q_flux = Temp.q_eq/(pi*(Loop.D_g_loc+Geo.wall_thickness*2)*Geo.dl(d));
+        Loop.A_conv_eff = Geo.num_channel * (Loop.cw + 2*Temp.fin_eff*Loop.ch) * Geo.dl(d);
+        q_flux = Temp.q_eq/Loop.A_conv_eff;
         Arrays.q_flux_array(d) = q_flux;
-        CHF_base = 0.1003+0.05264*sqrt(convvel(Loop.vel_c, 'm/s', 'ft/s')*...
-            (convtemp(Loop.T_sat, 'K', 'F')-convtemp(Loop.T_bulk, 'K', 'F')));
-        F_p = 1.17-8.56*(10^(-4))*convpres(Loop.P_loc, 'Pa', 'psi');
-        Arrays.CHF_array(d) = CHF_base*F_p*1635000;
+        dT_sub = Loop.T_sat - Loop.T_bulk; % K, bulk subcooling
+        if dT_sub > 0 % Valid at subcooling
+            CHF_base = 0.1003+0.05264*sqrt(convvel(Loop.vel_c, 'm/s', 'ft/s')*(dT_sub * 9/5)); 
+            F_p = 1.17-8.56*(10^(-4))*convpres(Loop.P_loc, 'Pa', 'psi');
+            Arrays.CHF_array(d) = CHF_base*F_p*1635000;
+        else
+            Arrays.CHF_array(d) = NaN;
+        end
         Arrays.T_sat_array(d) = Loop.T_sat;
 
         % Prepare for next station
@@ -498,7 +503,7 @@ while abs(Loop.P_error) > Loop.tol_P % Pressure guess loop
         Loop.T_bulk = Loop.T_bulk + Temp.q_eq/(mdot_f*Loop.cp_c); % K
 
         % Calculate pressure losses 
-        P_loss_viscous = (Loop.f_calc*Loop.rho_c*Loop.vel_c^2*Geo.dx)/(2*Loop.D_h_loc);
+        P_loss_viscous = (Loop.f_calc*Loop.rho_c*Loop.vel_c^2*Geo.dl(d))/(2*Loop.D_h_loc);
 
         if (d ~= length(Geo.pos_i))
             if (Loop.A_c_cs < Loop.A_c_cs_next)
@@ -621,7 +626,7 @@ xlabel('Axial Position x (m)');
 ylabel('Dimensionless');
 xline(0, 'k--', 'Throat', 'LabelVerticalAlignment', 'bottom', 'HandleVisibility', 'off');
 
-% Loop.Nu
+% Nu
 figure('Name', 'Nusselt Number', 'Color', 'w');
 hold on; grid on;
 plot(Geo.pos_i, Arrays.Nu_array, 'b', 'LineWidth', 2);
@@ -639,7 +644,7 @@ xlabel('Axial Position x (m)');
 ylabel('K');
 xline(0, 'k--', 'Throat', 'LabelVerticalAlignment', 'bottom', 'HandleVisibility', 'off');
 
-% Loop.Re
+% Re
 figure('Name', 'Geo.Re', 'Color', 'w');
 hold on; grid on;
 plot(Geo.pos_i, Arrays.Re_array, 'b', 'LineWidth', 2);
@@ -666,14 +671,7 @@ xlabel('Axial Position x (m)');
 ylabel('Dimensionless');
 xline(0, 'k--', 'Throat', 'LabelVerticalAlignment', 'bottom', 'HandleVisibility', 'off');
 
-% Q error
-figure('Name', 'Q Error', 'Color', 'w');
-hold on; grid on;
-plot(Geo.pos_i, Arrays.q_error_array, 'b', 'LineWidth', 2);
-title('Q Error')
-xlabel('Axial Position x (m)');
-ylabel('Dimensionless');
-xline(0, 'k--', 'Throat', 'LabelVerticalAlignment', 'bottom', 'HandleVisibility', 'off');
+
 
 function Temp = temp_iteration_sc(Param, Geo, Gas, Mat, Loop, d) % HW Temp Iteration, subcooled
 
@@ -688,8 +686,8 @@ function Temp = temp_iteration_sc(Param, Geo, Gas, Mat, Loop, d) % HW Temp Itera
         % Fin Efficiency
         Temp.k_w_loc = interp1(Mat.k_w_ref_temps, Mat.k_w_ref, Temp.T_hw_guess, 'linear', 'extrap');
         fin_m = sqrt((2*Loop.h_c)/(Temp.k_w_loc * Geo.w_rib));
-        fin_eff = tanh(fin_m * Loop.ch) / (fin_m * Loop.ch);
-        Temp.h_c_f = Loop.h_c*(Loop.cw+2*fin_eff*Loop.ch)/(Loop.cw+Geo.w_rib); % Fin corrected Loop.h_c
+        Temp.fin_eff = tanh(fin_m * Loop.ch) / (fin_m * Loop.ch);
+        Temp.h_c_f = Loop.h_c*(Loop.cw+2*Temp.fin_eff*Loop.ch)/(Loop.cw+Geo.w_rib); % Fin corrected Loop.h_c
         
         % Gas convection HTC with Bartz
         sigma = 1 / ...
@@ -749,7 +747,6 @@ function Temp = temp_iteration_nb(Param, Geo, Gas, Cool, Mat, Loop, d, Temp) % H
         log(1+2*Geo.wall_thickness/Loop.D_g_loc)/(2*pi*Geo.dl(d)*Temp.k_w_loc));
 
     % Secant
-    current_T_hw_error = Temp.T_hw_calc - Temp.T_hw_guess;
     % Save incoming subcooled solution as new "previous" guess
     T_hw_prev_guess = Temp.T_hw_guess;
     % Use T_sat floor to calculate second guess
@@ -759,8 +756,8 @@ function Temp = temp_iteration_nb(Param, Geo, Gas, Cool, Mat, Loop, d, Temp) % H
 
     tol_T_hw = 0.1; % K
     iter_T = 0;
-    T_hw_error = Temp.T_hw_calc - Temp.T_hw_guess;
-    T_hw_prev_error = current_T_hw_error;
+    T_hw_error = realmax;
+    T_hw_prev_error = 0;
     while abs(T_hw_error) > tol_T_hw
         iter_T = iter_T + 1;
         
@@ -780,8 +777,8 @@ function Temp = temp_iteration_nb(Param, Geo, Gas, Cool, Mat, Loop, d, Temp) % H
         % Fin Efficiency
         Temp.k_w_loc = interp1(Mat.k_w_ref_temps, Mat.k_w_ref, Temp.T_hw_guess, 'linear', 'extrap');
         fin_m = sqrt((2*Loop.h_c)/(Temp.k_w_loc * Geo.w_rib));
-        fin_eff = tanh(fin_m * Loop.ch) / (fin_m * Loop.ch);
-        Temp.h_c_f = h_c*(Loop.cw+2*fin_eff*Loop.ch)/(Loop.cw+Geo.w_rib); % Fin corrected Loop.h_c
+        Temp.fin_eff = tanh(fin_m * Loop.ch) / (fin_m * Loop.ch);
+        Temp.h_c_f = h_c*(Loop.cw+2*Temp.fin_eff*Loop.ch)/(Loop.cw+Geo.w_rib); % Fin corrected Loop.h_c
 
         R_th = (1/(Temp.h_c_f*Loop.A_base_loc))+...
             ((log(1+2*Geo.wall_thickness/Loop.D_g_loc))/(2*pi*Geo.dl(d)*Temp.k_w_loc));
