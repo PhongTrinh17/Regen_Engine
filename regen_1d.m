@@ -312,8 +312,8 @@ else % create tables first time (delete file when changing parameters)
     P_clean = P_vec(Cool.psat_index);
     get_P_sat = griddedInterpolant(Cool.T_sat_clean, Cool.P_clean, 'linear', 'nearest');
 
-    save(table_filename,'Cool.get_rho', 'Cool.get_cp', 'Cool.get_mu', 'Cool.get_k', 'Cool.get_T_sat', ...
-        'Cool.get_rho_l', 'Cool.get_rho_v', 'Cool.get_surften', 'Cool.get_h_fg', 'Cool.get_P_sat', 'P_vec', 'T_vec')
+    save(table_filename,'get_rho', 'get_cp', 'get_mu', 'get_k', 'get_T_sat', ...
+        'get_rho_l', 'get_rho_v', 'get_surften', 'get_h_fg', 'get_P_sat', 'P_vec', 'T_vec')
 end
 
 %% Material Properties (316 Stainless)
@@ -428,18 +428,19 @@ while abs(Loop.P_error) > Loop.tol_P % Pressure guess loop
         is_boiling = false;
         
         %Temp Loops
-        Temp = temp_iteration_sc(Geo, Gas, Loop, Mat, d, Param, is_boiling, 0);
+        Temp = temp_iteration_sc(Geo, Gas, Loop, Mat, d, Param);
         
-        T_cw = Temp.T_hw_guess - (Temp.q_eq)*...
+        Loop.T_cw = Temp.T_hw_guess - (Temp.q_eq)*...
                 log(1+2*Geo.wall_thickness/Loop.D_g_loc)/(2*pi*Geo.dx*Temp.k_w_loc); % Cold wall temp derived from guess, change Geo.dx to real dl
-        Loop.P_sat_T_cw = Cool.get_P_sat(T_cw);
+        Loop.P_sat_T_cw = get_P_sat(Loop.T_cw);
 
-        if (T_cw > Loop.T_sat)
-            Temp = temp_iteration_nb();
+        if (Loop.T_cw > Loop.T_sat)
+            Temp = temp_iteration_nb(Geo, Gas, Loop, Mat, d, Param, Temp);
+        end
 
   
         Arrays.T_hw_array(d) = Loop.Taw_loc;
-        Arrays.T_cw_array(d) = T_cw;
+        Arrays.T_cw_array(d) = Temp.T_cw;
         Arrays.h_g_array(d) = Temp.h_g;
         
         % Check CHF
@@ -662,7 +663,7 @@ function Temp = temp_iteration_sc(Geo, Gas, Loop, Mat, d, Param) % HW Temp Itera
             sigma;
 
         % Total Resistance Circuit
-        R_th = (1/(h_c_f*Geo.dx*(2*fin_eff*Loop.ch+Loop.cw)))+...
+        R_th = (1/(Temp.h_c_f*Geo.dx*(2*fin_eff*Loop.ch+Loop.cw)))+...
             ((Geo.num_channel*log(1+2*Geo.wall_thickness/Loop.D_g_loc))/(2*pi*Geo.dx*Temp.k_w_loc));
         Temp.q_eq = (Loop.Taw_loc - Loop.T_bulk)/...
             ((1/(Temp.h_g * Loop.A_g_loc)) + R_th);
@@ -671,7 +672,7 @@ function Temp = temp_iteration_sc(Geo, Gas, Loop, Mat, d, Param) % HW Temp Itera
         Temp.T_hw_calc = Loop.Taw_loc - Temp.q_eq/(Temp.h_g*Loop.A_g_loc);
 
         % Secant
-        current_T_hw_error = T_hw_calc - Temp.T_hw_guess;
+        current_T_hw_error = Temp.T_hw_calc - Temp.T_hw_guess;
         if iter_T == 1
             T_hw_prev_error = current_T_hw_error;
             temp_T = Temp.T_hw_guess;
@@ -693,31 +694,29 @@ function Temp = temp_iteration_sc(Geo, Gas, Loop, Mat, d, Param) % HW Temp Itera
     end
 end
 
-function Temp = temp_iteration_nb(Geo, Gas, Loop, Mat, d, Param, T_hw_guess, T_cw_guess, h_c_sc) % HW Temp Iteration, nuc boiling
+function Temp = temp_iteration_nb(Geo, Gas, Loop, Mat, d, Param, Temp) % HW Temp Iteration, nuc boiling
     
     h_nb = 0.00122*...
         (((Loop.k_c^0.79)*(Loop.cp_c^0.45)*(Loop.rho_c_l^0.49))/...
         ((Loop.surften^0.5)*(Loop.mu_c^0.29)*(Loop.h_fg^0.24)*(Loop.rho_c_v^0.24)))*...
-        ((T_cw_guess-Loop.T_sat)^0.24)*...
-        (P_sat_T_cw - Loop.P_loc)^0.75;
+        ((Loop.T_cw-Loop.T_sat)^0.24)*...
+        (Loop.P_sat_T_cw - Loop.P_loc)^0.75;
     S = 1/(1+(2.53*(10^-6))*(Loop.Re^1.17));
-    q_nb = Geo.A_co(d)*(h_c_f*(T_cw_guess-Loop.T_bulk)+S*h_nb*(T_cw-Loop.T_sat));
+    q_nb = Geo.A_co(d)*(Temp.h_c_f*(Loop.T_cw-Loop.T_bulk)+S*h_nb*(Loop.T_cw-Loop.T_sat));
 
     Temp.T_hw_calc = Loop.Taw_loc - q_nb/(Temp.h_g*Loop.A_g_loc);
-    Temp.T_cw = min(Loop.T_sat, Temp.T_hw_guess - (Temp.q_eq)*...
+    Temp.T_cw = min(Loop.T_sat, Temp.T_hw_calc - (Temp.q_eq)*...
         log(1+2*Geo.wall_thickness/Loop.D_g_loc)/(2*pi*Geo.dx*Temp.k_w_loc));
 
     % Secant
-    current_T_hw_error = T_hw_calc - T_hw_guess;
+    current_T_hw_error = Temp.T_hw_calc - Temp.T_hw_guess;
 
-    T_next = Temp.T_hw_guess - current_T_hw_error * (Temp.T_hw_guess - T_hw_prev_guess) / (current_T_hw_error - T_hw_prev_error + 1e-10); % small buffer to avoid divide by 0
-    T_next = max(Loop.T_bulk + 1, min(T_next, Loop.Taw_loc - 1));
-    T_hw_prev_guess = Temp.T_hw_guess;
-    T_hw_prev_error = current_T_hw_error;
-    Temp.T_hw_guess = T_next;
+    Temp.T_hw_guess = Temp.T_hw_guess + (0.1*current_T_hw_error);
 
+    tol_T_hw = 0.1; % K
+    iter_T = 0;
     T_hw_error = current_T_hw_error;
-
+    T_hw_prev_error = 0;
     while abs(T_hw_error) > tol_T_hw
         iter_T = iter_T + 1;
         
@@ -732,7 +731,7 @@ function Temp = temp_iteration_nb(Geo, Gas, Loop, Mat, d, Param, T_hw_guess, T_c
             (Geo.At/Gas.A_local(d))^0.9*...
             sigma;
 
-        h_c = h_c_sc + S*h_nb*(T_cw_guess - Loop.T_sat)/(T_cw_guess - Loop.T_bulk);
+        h_c = Loop.h_c + S*h_nb*(Temp.T_cw - Loop.T_sat)/(Temp.T_cw - Loop.T_bulk);
 
         % Fin Efficiency
         Temp.k_w_loc = interp1(Mat.k_w_ref_temps, Mat.k_w_ref, Temp.T_hw_guess, 'linear', 'extrap');
@@ -749,10 +748,16 @@ function Temp = temp_iteration_nb(Geo, Gas, Loop, Mat, d, Param, T_hw_guess, T_c
         Temp.T_hw_calc = Loop.Taw_loc - Temp.q_eq/(Temp.h_g*Loop.A_g_loc);
         Temp.T_cw = Temp.T_hw_calc - (Temp.q_eq)*...
             log(1+2*Geo.wall_thickness/Loop.D_g_loc)/(2*pi*Geo.dx*Temp.k_w_loc);
-        Loop.P_sat_T_cw = Cool.get_P_sat(T_cw);
+        Loop.P_sat_T_cw = get_P_sat(Temp.T_cw);
+
+        h_nb = 0.00122*...
+            (((Loop.k_c^0.79)*(Loop.cp_c^0.45)*(Loop.rho_c_l^0.49))/...
+            ((Loop.surften^0.5)*(Loop.mu_c^0.29)*(Loop.h_fg^0.24)*(Loop.rho_c_v^0.24)))*...
+            ((Loop.T_cw-Loop.T_sat)^0.24)*...
+            (Loop.P_sat_T_cw - Loop.P_loc)^0.75;
 
         % Secant
-        current_T_hw_error = T_hw_calc - Temp.T_hw_guess;
+        current_T_hw_error = Temp.T_hw_calc - Temp.T_hw_guess;
         if iter_T == 1
             T_hw_prev_error = current_T_hw_error;
             temp_T = Temp.T_hw_guess;
@@ -772,5 +777,4 @@ function Temp = temp_iteration_nb(Geo, Gas, Loop, Mat, d, Param, T_hw_guess, T_c
             disp('bad bad bad');
         end
     end
-
 end
