@@ -228,11 +228,10 @@ tables_loaded = false;
 if isfile(table_filename)
     tbl = load(table_filename);
     if isfield(tbl, 'table_version') && tbl.table_version == table_version_req
-        %get_rho = tbl.get_rho; get_cp = tbl.get_cp; get_mu = tbl.get_mu; get_k = tbl.get_k;
-        %get_T_sat = tbl.get_T_sat; get_rho_l = tbl.get_rho_l; get_rho_v = tbl.get_rho_v;
-        %get_surften = tbl.get_surften; get_h_fg = tbl.get_h_fg; get_P_sat = tbl.get_P_sat;
+        get_rho = tbl.get_rho; get_cp = tbl.get_cp; get_mu = tbl.get_mu; get_k = tbl.get_k;
+        get_T_sat = tbl.get_T_sat; get_rho_l = tbl.get_rho_l; get_rho_v = tbl.get_rho_v;
+        get_surften = tbl.get_surften; get_h_fg = tbl.get_h_fg; get_P_sat = tbl.get_P_sat;
         P_vec = tbl.P_vec; T_vec = tbl.T_vec;
-        Cool = tbl.Cool;
         tables_loaded = true;
     end
 end
@@ -272,7 +271,7 @@ if ~tables_loaded % create tables first time (rebuild when table_version_req is 
     for i = 1:res
         P_val = P_vec(i);
         T_sat_h2o = py.CoolProp.CoolProp.PropsSI('T','P',P_val,'Q',0, 'water');
-        if P_val < 6100000 % Ethanol critical pressure in Pa (with buffer)
+        if P_val < 6140000 % Ethanol critical pressure in Pa
             T_sat_eth = py.CoolProp.CoolProp.PropsSI('T','P',P_val,'Q',0, 'ethanol');
             % T_sat bisec iteration based on Raoult's Law to find bubble point
             T_sat_lo = T_sat_eth - 15; 
@@ -280,7 +279,7 @@ if ~tables_loaded % create tables first time (rebuild when table_version_req is 
             for t = 1:40
                 T_sat_mid = 0.5*(T_sat_lo + T_sat_hi);
                 P_bubble = x_eth*gam_eth*py.CoolProp.CoolProp.PropsSI('P','T',T_sat_mid,'Q',0,'ethanol') + ...
-                    x_h2o*gam_h2o*py.CoolProp.CoolProp.PropsSI('P','T',T_sat_mid,'Q',0,'water');
+                    x_h2o*gam_h2o*py.CoolProp.CoolProp.PropsSI('P','T',T_sat_mid,'Q','0','water');
                 if P_bubble < P_val
                     T_sat_lo = T_sat_mid;
                 else
@@ -463,17 +462,17 @@ while abs(Loop.P_error) > Loop.tol_P % Pressure guess loop
         % Gas properties
         Loop.Taw_loc = Gas.Taw(d); % Local adiabatic wall temp
         
-        %is_boiling = false;
+        is_boiling = false;
         
         %Temp Loops
-        Temp = temp_iteration_sc(Param, Geo, Gas, Mat, Loop, d);
+        Temp = temp_iteration_sc(Geo, Gas, Loop, Mat, d, Param);
         
         Loop.T_cw = Temp.T_hw_guess - (Temp.q_eq)*...
                 log(1+2*Geo.wall_thickness/Loop.D_g_loc)/(2*pi*Geo.dx*Temp.k_w_loc); % Cold wall temp derived from guess, change Geo.dx to real dl
-        Loop.P_sat_T_cw = Cool.get_P_sat(Loop.T_cw);
+        Loop.P_sat_T_cw = get_P_sat(Loop.T_cw);
 
         if (Loop.T_cw > Loop.T_sat)
-            Temp = temp_iteration_nb(Param, Geo, Gas, Cool, Mat, Loop, d, Temp);
+            Temp = temp_iteration_nb(Geo, Gas, Loop, Mat, d, Param, Temp);
         end
 
   
@@ -672,11 +671,11 @@ xlabel('Axial Position x (m)');
 ylabel('Dimensionless');
 xline(0, 'k--', 'Throat', 'LabelVerticalAlignment', 'bottom', 'HandleVisibility', 'off');
 
-function Temp = temp_iteration_sc(Param, Geo, Gas, Mat, Loop, d) % HW Temp Iteration, subcooled
+function Temp = temp_iteration_sc(Geo, Gas, Loop, Mat, d, Param) % HW Temp Iteration, subcooled
 
     Temp.T_hw_guess = 700; % Initial Guess (1.25 FOS applied to material melting point)
     T_hw_prev_guess = 650; % Cooler lower bound (Luca's value)
-    tol_T_hw = 1; % K
+    tol_T_hw = 0.1; % K
     T_hw_error = realmax; % placeholder
     T_hw_prev_error = 0;
     iter_T = 0;
@@ -731,7 +730,7 @@ function Temp = temp_iteration_sc(Param, Geo, Gas, Mat, Loop, d) % HW Temp Itera
     end
 end
 
-function Temp = temp_iteration_nb(Param, Geo, Gas, Cool, Mat, Loop, d, Temp) % HW Temp Iteration, nuc boiling
+function Temp = temp_iteration_nb(Geo, Gas, Loop, Mat, d, Param, Temp) % HW Temp Iteration, nuc boiling
     
     h_nb = 0.00122*...
         (((Loop.k_c^0.79)*(Loop.cp_c^0.45)*(Loop.rho_c_l^0.49))/...
@@ -784,7 +783,7 @@ function Temp = temp_iteration_nb(Param, Geo, Gas, Cool, Mat, Loop, d, Temp) % H
         Temp.T_hw_calc = Loop.Taw_loc - Temp.q_eq/(Temp.h_g*Loop.A_g_loc);
         Temp.T_cw = Temp.T_hw_calc - (Temp.q_eq)*...
             log(1+2*Geo.wall_thickness/Loop.D_g_loc)/(2*pi*Geo.dx*Temp.k_w_loc);
-        Loop.P_sat_T_cw = Cool.get_P_sat(Temp.T_cw);
+        Loop.P_sat_T_cw = get_P_sat(Temp.T_cw);
 
         h_nb = 0.00122*...
             (((Loop.k_c^0.79)*(Loop.cp_c^0.45)*(Loop.rho_c_l^0.49))/...
