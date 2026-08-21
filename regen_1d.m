@@ -468,17 +468,8 @@ while abs(Loop.P_error) > Loop.tol_P % Pressure guess loop
         Loop.Taw_loc = Gas.Taw(d); % Local adiabatic wall temp
         
         %Temp Loops
-        Temp = temp_iteration_sc(Param, Geo, Gas, Mat, Loop, d);
-        
-        Loop.T_cw = Temp.T_hw_guess - (Temp.q_eq)*...
-                log(1+2*Geo.wall_thickness/Loop.D_g_loc)/(2*pi*Geo.dl(d)*Temp.k_w_loc); % Cold wall temp derived from guess
-        Arrays.T_cw_array(d) = Loop.T_cw;
-        Loop.P_sat_T_cw = Cool.get_P_sat(Loop.T_cw);
-        
-        if (Loop.T_cw > Loop.T_sat)
-            Temp = temp_iteration_nb(Param, Geo, Gas, Cool, Mat, Loop, d, Temp);
-            Arrays.T_cw_array(d) = Temp.T_cw;
-        end
+        Temp = temp_iteration(Param, Geo, Gas, Cool, Mat, Loop, d);
+        Arrays.T_cw_array(d) = Temp.T_cw;
   
         Arrays.T_hw_array(d) = Temp.T_hw_guess;
         Arrays.fin_eff_array(d) = Temp.fin_eff;
@@ -696,21 +687,20 @@ xline(0, 'k--', 'Throat', 'LabelVerticalAlignment', 'bottom', 'HandleVisibility'
 
 
 
-function Temp = temp_iteration_sc(Param, Geo, Gas, Mat, Loop, d) % HW Temp Iteration, subcooled
+function Temp = temp_iteration(Param, Geo, Gas, Cool, Mat, Loop, d) % HW Temp Iteration
     Temp.T_hw_guess = 700; % Initial Guess (1.25 FOS applied to material melting point)
     T_hw_prev_guess = 650; % Cooler lower bound (Luca's value)
-    tol_T_hw = 1; % K
-    T_hw_error = realmax; % placeholder
-    T_hw_prev_error = 0;
-    iter_T = 0;
-    while abs(T_hw_error) > tol_T_hw
-        iter_T = iter_T + 1;
+    tol_q = 0.1; % w
+    q_prev_error = 0;
+    Temp.iter_T = 0;
+    while true
+        Temp.iter_T = Temp.iter_T + 1;
         % Fin Efficiency
         Temp.k_w_loc = interp1(Mat.k_w_ref_temps, Mat.k_w_ref, Temp.T_hw_guess, 'linear', 'extrap');
         fin_m = sqrt((2*Loop.h_c)/(Temp.k_w_loc * Geo.w_rib));
         Temp.fin_eff = tanh(fin_m * Loop.ch) / (fin_m * Loop.ch);
         Temp.h_c_f = Loop.h_c*(Loop.cw+2*Temp.fin_eff*Loop.ch)/(Loop.cw+Geo.w_rib); % Fin corrected Loop.h_c
-        
+
         % Gas convection HTC with Bartz
         sigma = 1 / ...
             ((0.5 * (Temp.T_hw_guess/Gas.T_stag) * (1 + (Gas.gamma-1)/2 * Gas.M_local(d)^2) + 0.5)^0.68 *...
@@ -722,202 +712,42 @@ function Temp = temp_iteration_sc(Param, Geo, Gas, Mat, Loop, d) % HW Temp Itera
             (Geo.At/Gas.A_local(d))^0.9*...
             sigma;
 
-        % Total Resistance Circuit
-        R_th = (1/(Temp.h_c_f*Loop.A_base_loc))+...
-            ((log(1+2*Geo.wall_thickness/Loop.D_g_loc))/(2*pi*Geo.dl(d)*Temp.k_w_loc));
-        Temp.q_eq = (Loop.Taw_loc - Loop.T_bulk)/...
-            ((1/(Temp.h_g * Loop.A_g_loc)) + R_th);
+        Temp.q_eq = Temp.h_g*Loop.A_g_loc*(Loop.Taw_loc - Temp.T_hw_guess);
+        Temp.T_cw = Temp.T_hw_guess - (Temp.q_eq)*...
+            log(1+2*Geo.wall_thickness/Loop.D_g_loc)/(2*pi*Geo.dl(d)*Temp.k_w_loc); % Cold wall temp derived from guess
 
-        % Gas - hot wall convection
-        Temp.T_hw_calc = Loop.Taw_loc - Temp.q_eq/(Temp.h_g*Loop.A_g_loc);
+        % coolant side shares the convection term in both regimes so q_c is continuous at t_cw = t_sat
+        q_c = Temp.h_c_f*Loop.A_base_loc*(Temp.T_cw - Loop.T_bulk);
+        if Temp.T_cw > Loop.T_sat
+            h_nb = 0.00122*...
+                (((Loop.k_c^0.79)*(Loop.cp_c^0.45)*(Loop.rho_c_l^0.49))/...
+                ((Loop.surften^0.5)*(Loop.mu_c^0.29)*(Loop.h_fg^0.24)*(Loop.rho_c_v^0.24)))*...
+                ((Temp.T_cw-Loop.T_sat)^0.24)*...
+                (max(0, Cool.get_P_sat(min(Temp.T_cw, 513)) - Loop.P_loc))^0.75; % Cap at critical pressure for ethanol
+            S = 1/(1+(2.53*(10^-6))*(Loop.Re^1.17));
+            q_c = q_c + S*h_nb*(Temp.h_c_f/Loop.h_c)*Loop.A_base_loc*(Temp.T_cw - Loop.T_sat);
+        end
 
         % Secant
-        current_T_hw_error = Temp.T_hw_calc - Temp.T_hw_guess;
-        if iter_T == 1
-            T_hw_prev_error = current_T_hw_error;
-            temp_T = Temp.T_hw_guess;
-            Temp.T_hw_guess = T_hw_prev_guess;
-            T_hw_prev_guess = temp_T;
-        else
-            T_next = Temp.T_hw_guess - current_T_hw_error * (Temp.T_hw_guess - T_hw_prev_guess) / (current_T_hw_error - T_hw_prev_error + 1e-10); % small buffer to avoid divide by 0
-            T_next = max(Loop.T_bulk + 1, min(T_next, Loop.Taw_loc - 1));
-            T_hw_prev_guess = Temp.T_hw_guess;
-            T_hw_prev_error = current_T_hw_error;
-            Temp.T_hw_guess = T_next;
+        Temp.q_error = Temp.q_eq - q_c;
+        if abs(Temp.q_error) < tol_q
+            break;
         end
-        T_hw_error = current_T_hw_error;
-
-        if iter_T > 1000
-            disp('bad bad bad');
+        if Temp.iter_T > 100
+            warning('t_hw failed to converge at station %d (residual %.3g w)', d, Temp.q_error);
+            break;
         end
-    end
-end
-
-function Temp = temp_iteration_nb(Param, Geo, Gas, Cool, Mat, Loop, d, Temp) % HW Temp Iteration, nuc boiling
-    %{
-    h_nb = 0.00122*...
-        (((Loop.k_c^0.79)*(Loop.cp_c^0.45)*(Loop.rho_c_l^0.49))/...
-        ((Loop.surften^0.5)*(Loop.mu_c^0.29)*(Loop.h_fg^0.24)*(Loop.rho_c_v^0.24)))*...
-        (max(0,Loop.T_cw-Loop.T_sat))^0.24 *...
-        (max(0,Loop.P_sat_T_cw - Loop.P_loc))^0.75;
-    S = 1/(1+(2.53*(10^-6))*(Loop.Re^1.17));
-    q_nb = Geo.A_co(d)*(Temp.h_c_f*(Loop.T_cw-Loop.T_bulk)+S*h_nb*(Loop.T_cw-Loop.T_sat));
-
-    Temp.T_hw_calc = Loop.Taw_loc - q_nb/(Temp.h_g*Loop.A_g_loc);
-    Temp.T_cw = Temp.T_hw_calc - (Temp.q_eq)*...
-        log(1+2*Geo.wall_thickness/Loop.D_g_loc)/(2*pi*Geo.dl(d)*Temp.k_w_loc);
-
-    % Secant
-    current_T_hw_error = Temp.T_hw_calc - Temp.T_hw_guess;
-    T_hw_prev_guess = Temp.T_hw_guess; % From subcooled
-    Temp.T_hw_guess = Temp.T_hw_calc; % Boiling predictor above
-
-    tol_T_hw = 0.1; % K
-    iter_T = 0;
-    T_hw_error = realmax;
-    T_hw_prev_error = current_T_hw_error;
-    %}
-    T_hw_prev_guess = Temp.T_hw_guess; % From subcooled
-
-    % Use the T_sat boundary to derive another T_hw_guess
-    R_wall = log(1 + 2*Geo.wall_thickness/Loop.D_g_loc) / (2 * pi * Geo.dl(d) * Temp.k_w_loc);
-    R_gas = 1 / (Temp.h_g * Loop.A_g_loc);
-    Temp.T_hw_guess = (Loop.Taw_loc * R_wall + Loop.T_sat * R_gas) / (R_wall + R_gas);
-
-    tol_T_hw = 0.1; % K
-    Temp.iter_T = 0;
-    T_hw_error = realmax;
-    T_hw_prev_error = 0;
-
-    while abs(T_hw_error) > tol_T_hw
-        Temp.iter_T = Temp.iter_T + 1;
-        
-        % Gas convection HTC with Bartz
-        sigma = 1 / ...
-            ((0.5 * (Temp.T_hw_guess/Gas.T_stag) * (1 + (Gas.gamma-1)/2 * Gas.M_local(d)^2) + 0.5)^0.68 *...
-            (1 + (Gas.gamma-1)/2 * Gas.M_local(d)^2)^0.12);
-        Temp.h_g = ((0.026/Geo.D_t^0.2)*...
-            ((Gas.mu_g_local(d)^0.2*Gas.cp_g_local(d))/Gas.prandtl_g_local(d)^0.6)*...
-            (Param.Pc/Param.cstar_act)^0.8)*...
-            (Geo.D_t/Geo.R_curve)^0.1*...
-            (Geo.At/Gas.A_local(d))^0.9*...
-            sigma;
-        
-        % Calculate T_cw for the current T_hw_guess
-        q_guess = Temp.h_g * Loop.A_g_loc * (Loop.Taw_loc - Temp.T_hw_guess);
-        Temp.T_cw = Temp.T_hw_guess - q_guess * R_wall;
-        Loop.P_sat_T_cw = Cool.get_P_sat(min(Temp.T_cw, 513)); % Cap at critical pressure for ethanol
-
-        h_nb = 0.00122*...
-            (((Loop.k_c^0.79)*(Loop.cp_c^0.45)*(Loop.rho_c_l^0.49))/...
-            ((Loop.surften^0.5)*(Loop.mu_c^0.29)*(Loop.h_fg^0.24)*(Loop.rho_c_v^0.24)))*...
-            (max(0,Temp.T_cw-Loop.T_sat))^0.24 *...
-            (max(0,Loop.P_sat_T_cw - Loop.P_loc))^0.75;
-        S = 1/(1+(2.53*(10^-6))*(Loop.Re^1.17));
-        
-        % Check to avoid secant dividing by zero when T_cw = T_bulk
-        if Temp.T_cw > Loop.T_bulk
-            Loop.h_c = Loop.h_c + S*h_nb*(Temp.T_cw - Loop.T_sat)/(Temp.T_cw - Loop.T_bulk);
-        end
-        
-        Temp.k_w_loc = interp1(Mat.k_w_ref_temps, Mat.k_w_ref, Temp.T_hw_guess, 'linear', 'extrap');
-        fin_m = sqrt((2*Loop.h_c)/(Temp.k_w_loc * Geo.w_rib));
-        Temp.fin_eff = tanh(fin_m * Loop.ch) / (fin_m * Loop.ch);
-        Temp.h_c_f = Loop.h_c*(Loop.cw+2*Temp.fin_eff*Loop.ch)/(Loop.cw+Geo.w_rib); % Fin corrected Loop.h_c
-
-        R_th = (1/(Temp.h_c_f*Loop.A_base_loc))+...
-            ((log(1+2*Geo.wall_thickness/Loop.D_g_loc))/(2*pi*Geo.dl(d)*Temp.k_w_loc));
-        Temp.q_eq = (Loop.Taw_loc - Loop.T_bulk)/...
-            ((1/(Temp.h_g * Loop.A_g_loc)) + R_th);
-        Temp.T_hw_calc = Loop.Taw_loc - Temp.q_eq/(Temp.h_g*Loop.A_g_loc);
-        Temp.q_error = Temp.q_eq - q_guess;
-
-        % Secant
-        current_T_hw_error = Temp.T_hw_calc - Temp.T_hw_guess;
         if Temp.iter_T == 1
-            T_hw_prev_error = current_T_hw_error;
+            q_prev_error = Temp.q_error;
             temp_T = Temp.T_hw_guess;
             Temp.T_hw_guess = T_hw_prev_guess;
             T_hw_prev_guess = temp_T;
         else
-            T_next = Temp.T_hw_guess - current_T_hw_error * (Temp.T_hw_guess - T_hw_prev_guess) / (current_T_hw_error - T_hw_prev_error + 1e-10); % small buffer to avoid divide by 0
+            T_next = Temp.T_hw_guess - Temp.q_error * (Temp.T_hw_guess - T_hw_prev_guess) / (Temp.q_error - q_prev_error + 1e-10); % small buffer to avoid divide by 0
             T_next = max(Loop.T_bulk + 1, min(T_next, Loop.Taw_loc - 1));
             T_hw_prev_guess = Temp.T_hw_guess;
-            T_hw_prev_error = current_T_hw_error;
+            q_prev_error = Temp.q_error;
             Temp.T_hw_guess = T_next;
-        end
-        T_hw_error = current_T_hw_error;
-
-        if Temp.iter_T > 1000
-            disp('bad bad bad');
         end
     end
 end
-
-% Old loop logic
-%{
-while abs(T_hw_error) > tol_T_hw
-        iter_T = iter_T + 1;
-        
-        % Gas convection HTC with Bartz
-        sigma = 1 / ...
-            ((0.5 * (Temp.T_hw_guess/Gas.T_stag) * (1 + (Gas.gamma-1)/2 * Gas.M_local(d)^2) + 0.5)^0.68 *...
-            (1 + (Gas.gamma-1)/2 * Gas.M_local(d)^2)^0.12);
-        Temp.h_g = ((0.026/Geo.D_t^0.2)*...
-            ((Gas.mu_g_local(d)^0.2*Gas.cp_g_local(d))/Gas.prandtl_g_local(d)^0.6)*...
-            (Param.Pc/Param.cstar_act)^0.8)*...
-            (Geo.D_t/Geo.R_curve)^0.1*...
-            (Geo.At/Gas.A_local(d))^0.9*...
-            sigma;
-
-        h_c = Loop.h_c + S*h_nb*(Temp.T_cw - Loop.T_sat)/(Temp.T_cw - Loop.T_bulk);
-
-        % Wall Conduction
-        Temp.k_w_loc = interp1(Mat.k_w_ref_temps, Mat.k_w_ref, Temp.T_hw_guess, 'linear', 'extrap');
-        R_wall = log(1 + 2*Geo.wall_thickness/Loop.D_g_loc) / (2 * pi * Geo.dl(d) * Temp.k_w_loc);
-
-        
-
-        fin_m = sqrt((2*Loop.h_c)/(Temp.k_w_loc * Geo.w_rib));
-        Temp.fin_eff = tanh(fin_m * Loop.ch) / (fin_m * Loop.ch);
-        Temp.h_c_f = h_c*(Loop.cw+2*Temp.fin_eff*Loop.ch)/(Loop.cw+Geo.w_rib); % Fin corrected Loop.h_c
-
-        R_th = (1/(Temp.h_c_f*Loop.A_base_loc))+...
-            ((log(1+2*Geo.wall_thickness/Loop.D_g_loc))/(2*pi*Geo.dl(d)*Temp.k_w_loc));
-        Temp.q_eq = (Loop.Taw_loc - Loop.T_bulk)/...
-            ((1/(Temp.h_g * Loop.A_g_loc)) + R_th);
-        
-        Temp.T_hw_calc = Loop.Taw_loc - Temp.q_eq/(Temp.h_g*Loop.A_g_loc);
-        Temp.T_cw = Temp.T_hw_calc - (Temp.q_eq)*...
-            log(1+2*Geo.wall_thickness/Loop.D_g_loc)/(2*pi*Geo.dl(d)*Temp.k_w_loc);
-        Loop.P_sat_T_cw = Cool.get_P_sat(min(Temp.T_cw, 513)); % Cap at critical pressure for ethanol
-
-        h_nb = 0.00122*...
-            (((Loop.k_c^0.79)*(Loop.cp_c^0.45)*(Loop.rho_c_l^0.49))/...
-            ((Loop.surften^0.5)*(Loop.mu_c^0.29)*(Loop.h_fg^0.24)*(Loop.rho_c_v^0.24)))*...
-            (max(0,Temp.T_cw-Loop.T_sat))^0.24 *...
-            (max(0,Loop.P_sat_T_cw - Loop.P_loc))^0.75;
-
-        % Secant
-        current_T_hw_error = Temp.T_hw_calc - Temp.T_hw_guess;
-        if iter_T == 1
-            T_hw_prev_error = current_T_hw_error;
-            temp_T = Temp.T_hw_guess;
-            Temp.T_hw_guess = T_hw_prev_guess;
-            T_hw_prev_guess = temp_T;
-        else
-            T_next = Temp.T_hw_guess - current_T_hw_error * (Temp.T_hw_guess - T_hw_prev_guess) / (current_T_hw_error - T_hw_prev_error + 1e-10); % small buffer to avoid divide by 0
-            T_next = max(Loop.T_bulk + 1, min(T_next, Loop.Taw_loc - 1));
-            T_hw_prev_guess = Temp.T_hw_guess;
-            T_hw_prev_error = current_T_hw_error;
-            Temp.T_hw_guess = T_next;
-        end
-
-        T_hw_error = current_T_hw_error;
-
-        if iter_T > 1000
-            disp('bad bad bad');
-        end
-    end
-%}
-
