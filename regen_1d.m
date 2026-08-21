@@ -23,8 +23,8 @@ cf_eff = 0.98;
 
 % CEA parameters where Pamb = 9.94 psia (interpolate for diff values across nozzle after)
 % Taken from throat (A/Geo.At = 1.00)
-o_f = 1.3;
-Pc_us = 300; % psia, target
+o_f = 1.4;
+Pc_us = 370; % psia, target
 Param.Pc = convpres(Pc_us, 'psi', 'Pa');
 card_str = sprintf(['fuel C2H5OH(L)   C 2 H 6 O 1\n', ...
     'h,cal=-66370.0      t(k)=298.00      wt%%=75.00\n', ...
@@ -383,6 +383,8 @@ Arrays.h_c_f_array = zeros(size(Geo.pos_i));
 Arrays.Re_array = zeros(size(Geo.pos_i));
 Arrays.vel_c_array = zeros(size(Geo.pos_i));
 Arrays.fin_eff_array = zeros(size(Geo.pos_i));
+Arrays.q_error_array = zeros(size(Geo.pos_i));
+Arrays.iter_T_array = zeros(size(Geo.pos_i));
 
 
 %% Main Loop
@@ -422,6 +424,7 @@ while abs(Loop.P_error) > Loop.tol_P % Pressure guess loop
         Loop.mu_c = Cool.get_mu(Loop.P_loc, Loop.T_bulk);
         Loop.k_c = Cool.get_k(Loop.P_loc, Loop.T_bulk);
         Loop.T_sat = Cool.get_T_sat(Loop.P_loc);
+        Loop.T_sat_200 = Cool.get_T_sat(convpres(200, 'psi', 'Pa'));
         Loop.rho_c_l = Cool.get_rho_l(Loop.P_loc);
         Loop.rho_c_v = Cool.get_rho_v(Loop.P_loc);
         Loop.surften = Cool.get_surften(Loop.P_loc);
@@ -464,8 +467,6 @@ while abs(Loop.P_error) > Loop.tol_P % Pressure guess loop
         % Gas properties
         Loop.Taw_loc = Gas.Taw(d); % Local adiabatic wall temp
         
-        %is_boiling = false;
-        
         %Temp Loops
         Temp = temp_iteration_sc(Param, Geo, Gas, Mat, Loop, d);
         
@@ -482,16 +483,19 @@ while abs(Loop.P_error) > Loop.tol_P % Pressure guess loop
         Arrays.T_hw_array(d) = Temp.T_hw_guess;
         Arrays.fin_eff_array(d) = Temp.fin_eff;
         Arrays.h_g_array(d) = Temp.h_g;
+        Arrays.q_error_array(d) = Temp.q_error;
+        Arrays.iter_T_array(d) = Temp.iter_T;
         
         % Check CHF
-        Loop.A_conv_eff = Geo.num_channel * (Loop.cw + 2*Temp.fin_eff*Loop.ch) * Geo.dl(d);
-        q_flux = Temp.q_eq/Loop.A_conv_eff;
+        Loop.A_conv = Geo.num_channel * (Loop.cw + 2*Loop.ch) * Geo.dl(d);
+        q_flux = Temp.q_eq/Loop.A_conv;
         Arrays.q_flux_array(d) = q_flux;
         dT_sub = Loop.T_sat - Loop.T_bulk; % K, bulk subcooling
+        dT_sub_200 = convtemp(Loop.T_sat_200, 'K', 'F') - convtemp(Loop.T_bulk, 'K', 'F');
         if dT_sub > 0 % Valid at subcooling
-            CHF_base = 0.1003+0.05264*sqrt(convvel(Loop.vel_c, 'm/s', 'ft/s')*(dT_sub * 9/5)); 
+            CHF_base = 0.1003+0.05264*sqrt(convvel(Loop.vel_c, 'm/s', 'ft/s')*(dT_sub_200)); 
             F_p = 1.17-8.56*(10^(-4))*convpres(Loop.P_loc, 'Pa', 'psi');
-            Arrays.CHF_array(d) = CHF_base*F_p*1635000;
+            Arrays.CHF_array(d) = CHF_base*F_p*1634246;
         else
             Arrays.CHF_array(d) = NaN;
         end
@@ -561,6 +565,7 @@ hold on; grid on;
 plot(Geo.pos_i, Arrays.T_hw_array, 'r', 'LineWidth', 2);
 plot(Geo.pos_i, Arrays.T_cw_array, 'b', 'LineWidth', 2);
 plot(Geo.pos_i, Arrays.T_bulk_array, 'c', 'LineWidth', 2);
+plot(Geo.pos_i, Arrays.T_sat_array, 'g', 'LineWidth', 2);
 legend('Hot Wall', 'Cold Wall', 'Bulk Coolant')
 title('Temperatures')
 xlabel('Axial Position x (m)');
@@ -670,6 +675,25 @@ xlabel('Axial Position x (m)');
 ylabel('Dimensionless');
 xline(0, 'k--', 'Throat', 'LabelVerticalAlignment', 'bottom', 'HandleVisibility', 'off');
 
+% Q Error
+figure('Name', 'Q error', 'Color', 'w');
+hold on; grid on;
+plot(Geo.pos_i, Arrays.q_error_array, 'b', 'LineWidth', 2);
+title('Q Error')
+xlabel('Axial Position x (m)');
+ylabel('Watts');
+xline(0, 'k--', 'Throat', 'LabelVerticalAlignment', 'bottom', 'HandleVisibility', 'off');
+
+% Iterations per Station
+figure('Name', 'Iterations per Station', 'Color', 'w');
+hold on; grid on;
+plot(Geo.pos_i, Arrays.iter_T_array, 'b', 'LineWidth', 2);
+title('Iterations per Station')
+xlabel('Axial Position x (m)');
+ylabel('Number of Iterations');
+xline(0, 'k--', 'Throat', 'LabelVerticalAlignment', 'bottom', 'HandleVisibility', 'off');
+
+
 
 
 function Temp = temp_iteration_sc(Param, Geo, Gas, Mat, Loop, d) % HW Temp Iteration, subcooled
@@ -761,12 +785,12 @@ function Temp = temp_iteration_nb(Param, Geo, Gas, Cool, Mat, Loop, d, Temp) % H
     Temp.T_hw_guess = (Loop.Taw_loc * R_wall + Loop.T_sat * R_gas) / (R_wall + R_gas);
 
     tol_T_hw = 0.1; % K
-    iter_T = 0;
+    Temp.iter_T = 0;
     T_hw_error = realmax;
     T_hw_prev_error = 0;
 
     while abs(T_hw_error) > tol_T_hw
-        iter_T = iter_T + 1;
+        Temp.iter_T = Temp.iter_T + 1;
         
         % Gas convection HTC with Bartz
         sigma = 1 / ...
@@ -793,25 +817,24 @@ function Temp = temp_iteration_nb(Param, Geo, Gas, Cool, Mat, Loop, d, Temp) % H
         
         % Check to avoid secant dividing by zero when T_cw = T_bulk
         if Temp.T_cw > Loop.T_bulk
-            h_c = Loop.h_c + S*h_nb*(Temp.T_cw - Loop.T_sat)/(Temp.T_cw - Loop.T_bulk);
-        else
-            h_c = Loop.h_c;
+            Loop.h_c = Loop.h_c + S*h_nb*(Temp.T_cw - Loop.T_sat)/(Temp.T_cw - Loop.T_bulk);
         end
         
         Temp.k_w_loc = interp1(Mat.k_w_ref_temps, Mat.k_w_ref, Temp.T_hw_guess, 'linear', 'extrap');
         fin_m = sqrt((2*Loop.h_c)/(Temp.k_w_loc * Geo.w_rib));
         Temp.fin_eff = tanh(fin_m * Loop.ch) / (fin_m * Loop.ch);
-        Temp.h_c_f = h_c*(Loop.cw+2*Temp.fin_eff*Loop.ch)/(Loop.cw+Geo.w_rib); % Fin corrected Loop.h_c
+        Temp.h_c_f = Loop.h_c*(Loop.cw+2*Temp.fin_eff*Loop.ch)/(Loop.cw+Geo.w_rib); % Fin corrected Loop.h_c
 
         R_th = (1/(Temp.h_c_f*Loop.A_base_loc))+...
             ((log(1+2*Geo.wall_thickness/Loop.D_g_loc))/(2*pi*Geo.dl(d)*Temp.k_w_loc));
         Temp.q_eq = (Loop.Taw_loc - Loop.T_bulk)/...
             ((1/(Temp.h_g * Loop.A_g_loc)) + R_th);
         Temp.T_hw_calc = Loop.Taw_loc - Temp.q_eq/(Temp.h_g*Loop.A_g_loc);
+        Temp.q_error = Temp.q_eq - q_guess;
 
         % Secant
         current_T_hw_error = Temp.T_hw_calc - Temp.T_hw_guess;
-        if iter_T == 1
+        if Temp.iter_T == 1
             T_hw_prev_error = current_T_hw_error;
             temp_T = Temp.T_hw_guess;
             Temp.T_hw_guess = T_hw_prev_guess;
@@ -825,7 +848,7 @@ function Temp = temp_iteration_nb(Param, Geo, Gas, Cool, Mat, Loop, d, Temp) % H
         end
         T_hw_error = current_T_hw_error;
 
-        if iter_T > 1000
+        if Temp.iter_T > 1000
             disp('bad bad bad');
         end
     end
