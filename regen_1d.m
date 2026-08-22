@@ -55,6 +55,9 @@ cf_cea = c.get_PambCf(pyargs('Pamb', Pamb, 'Pc', Pc_us, 'MR', o_f, 'eps', exp_ra
 cf_theo = double(cf_cea{1});
 MW = 23.446; % g/mol
 
+exit_pres_ratio = c.get_PcOvPe(pyargs('Pc', Pc_us, 'MR', o_f, 'eps', exp_ratio));
+Gas.P_exit = convpres(Pc_us/exit_pres_ratio, 'psi', 'Pa');
+
 % Calculating target injector manifold pressure
 fuel_stiffness = 0.20; % standard
 dP_inj = fuel_stiffness * Param.Pc; % Pa
@@ -374,6 +377,7 @@ Arrays.q_flux_array = zeros(size(Geo.pos_i));
 Arrays.h_g_array = zeros(size(Geo.pos_i));
 Arrays.h_c_array = zeros(size(Geo.pos_i));
 Arrays.CHF_array = zeros(size(Geo.pos_i));
+Arrays.stress_array = zeros(size(Geo.pos_i));
 
 % Test Arrays (remove when done)
 Arrays.f_array = zeros(size(Geo.pos_i));
@@ -531,6 +535,12 @@ while abs(Loop.P_error) > Loop.tol_P % Pressure guess loop
         Arrays.P_loss_array(d) = P_loss_tot;
         Loop.P_loc = Loop.P_loc - P_loss_tot; 
         Arrays.P_array(d) = convpres(Loop.P_loc, 'Pa', 'psi');
+
+        % Calculate Von Mises Stress
+        Loop.T_iw = (Temp.T_hw_guess - Loop.T_cw)/2;
+        Loop.T_ow = (Loop.T_close_ow - Loop.T_far_ow);
+        stressAnalysis(Geo, Loop, Mat, Param, d);
+        Arrays.stress_array(d) = Stress.sigma_VM;
      end
 
      current_P_error = Loop.P_loc - P_target;
@@ -921,3 +931,41 @@ while abs(T_hw_error) > tol_T_hw
     end
 %}
 
+function stressAnalysis(Geo, Loop, Mat, Param, d)
+    p_diff = Param.Pc - Loop.P_loc;
+    r_in = Loop.D_g_loc/2;
+    r_out = r_in+Geo.wall_thickness+Loop.ch+Geo.out_wall_thickness;
+    r_avg = (r_in + r_out)/2;
+
+    % Shear
+    Stress.sigma_s_mech = 0.5*p_diff*Loop.cw*Geo.wall_thickness;
+    Stress.sigma_s_therm = ((Loop.cw+Geo.w_rib)*Mat.alpha*Mat.E*...
+        (Loop.T_iw-Loop.T_ow)*Geo.wall_thickness*Geo.out_wall_thickness)/...
+        (5*Geo.w_rib*(1-Mat.nu)*...
+        (Geo.wall_thickness+Geo.out_wall_thickness)^2);
+    Stress.sigma_s_tot = Stress.sigma_s_mech + Stress.sigma_s_therm; %need E, nu, temps, out thick
+
+    % Hoop
+    Stress.sigma_h_mech = (p_diff * r_avg)/...
+        (Geo.wall_thickness+Geo.out_wall_thickness);
+    Stress.sigma_h_therm = (Mat.alpha*Mat.E*(Loop.T_iw-Loop.T_ow)*...
+        Geo.out_wall_thickness) / ((1-Mat.nu)*...
+        (Geo.wall_thickness + Geo.out_wall_thickness));
+    Stress.sigma_h_tot = Stress.sigma_h_mech + Stress.sigma_h_therm;
+
+    % Bending
+    Stress.sigma_b = (p_diff * Loop.cw^2)/(2*Geo.wall_thickness);
+    
+    % Axial
+    if (d < NaN) %less than whatever the throat station is
+        Stress.sigma_a = (Gas.P_exit*pi*((Loop.D_g_loc/2)^2-Loop.Geo.Rt^2))/...
+            ((pi*(r_out^2 - Loop.Geo.Rt^2))-...
+            (Geo.num_channel*Loop.cw*Loop.ch));
+    else
+        Stress.sigma_a = 0;
+    end
+
+    Stress.sigma_VM = sqrt(0.5*((Stress.sigma_a-Stress.sigma_h_tot)^2+...
+        (Stress.sigma_h_tot - Stress.sigma_b)^2 +...
+        (Stress.sigma_b - Stress.sigma_a)^2) + 3*Stress.sigma_s_tot^2);
+end
